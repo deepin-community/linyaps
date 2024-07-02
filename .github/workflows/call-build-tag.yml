@@ -9,6 +9,6 @@ concurrency:
 
 jobs:
   build:
-    uses: deepin-community/.github/.github/workflows/build-tag.yml@master
+    uses: deepin-community/.github/.github/workflows/build-tag.yml@release
     secrets:
       BridgeToken: ${{ secrets.BridgeToken }}
