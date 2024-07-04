@@ -42,6 +42,7 @@ Depends: desktop-file-utils,
          linglong-box | crun,
          ostree,
          shared-mime-info,
+         linglong-installer,
          ${misc:Depends},
          ${shlibs:Depends}
 Replaces: linglong-dbus-proxy
