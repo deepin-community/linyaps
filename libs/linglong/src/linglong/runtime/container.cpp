@@ -189,6 +189,15 @@ Container::run(const ocppi::runtime::config::types::Process &process) noexcept
       .type = "bind",
     });
 
+    this->cfg.mounts->push_back(ocppi::runtime::config::types::Mount{
+      .destination = "/run/host/monitor",
+      .gidMappings = {},
+      .options = { { "rbind" } },
+      .source = runtimeDir.absoluteFilePath("linglong/monitor").toStdString(),
+      .type = "bind",
+      .uidMappings = {},
+    });
+
     nlohmann::json json = this->cfg;
 
     {
