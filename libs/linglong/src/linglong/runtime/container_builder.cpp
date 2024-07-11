@@ -54,22 +54,20 @@ auto getPatchesForApplication(const QString &appID) noexcept
     std::vector<api::types::v1::OciConfigurationPatch> patches;
 
     for (const auto &bind : *config->permissions->binds) {
-        patches.push_back({
-          .ociVersion = "1.0.1",
-          .patch = nlohmann::json::array({
-            { "op", "add" },
-            { "path", "/mounts/-" },
-            { "value",
-              { { "source", bind.source },
-                { "destination", bind.destination },
-                { "options",
-                  nlohmann::json::array({
-                    "rbind",
-                    "nosuid",
-                    "nodev",
-                  }) } } },
-          }),
-        });
+        patches.push_back({ .ociVersion = "1.0.1",
+                            .patch = nlohmann::json::array({
+                              { "op", "add" },
+                              { "path", "/mounts/-" },
+                              { "value",
+                                { { "source", bind.source },
+                                  { "destination", bind.destination },
+                                  { "options",
+                                    nlohmann::json::array({
+                                      "rbind",
+                                      "nosuid",
+                                      "nodev",
+                                    }) } } },
+                            }) });
     }
 
     return patches;
@@ -334,14 +332,10 @@ auto fixMount(ocppi::runtime::config::types::Config config) noexcept
     auto pos = mounts.begin();
     for (const auto &bind : rootBinds) {
         auto destination = "/" + bind.fileName();
-        auto mountPoint = MountType{
-            .destination = destination.toStdString(),
-            .gidMappings = {},
-            .options = { { "rbind", "ro" } },
-            .source = bind.absoluteFilePath().toStdString(),
-            .type = "bind",
-            .uidMappings = {},
-        };
+        auto mountPoint = MountType{ .destination = destination.toStdString(),
+                                     .options = { { "rbind", "ro" } },
+                                     .source = bind.absoluteFilePath().toStdString(),
+                                     .type = "bind" };
         if (bind.isSymLink()) {
             mountPoint.options->emplace_back("copy-symlink");
         }
@@ -352,14 +346,10 @@ auto fixMount(ocppi::runtime::config::types::Config config) noexcept
     for (const auto &tmpfs : tmpfsPath) {
         pos = mounts.insert(
           pos,
-          MountType{
-            .destination = tmpfs.mid(originalRoot.absolutePath().size()).toStdString(),
-            .gidMappings = {},
-            .options = { { "nodev", "nosuid", "mode=755" } },
-            .source = "tmpfs",
-            .type = "tmpfs",
-            .uidMappings = {},
-          });
+          MountType{ .destination = tmpfs.mid(originalRoot.absolutePath().size()).toStdString(),
+                     .options = { { "nodev", "nosuid", "mode=755" } },
+                     .source = "tmpfs",
+                     .type = "tmpfs" });
         ++pos;
 
         auto dir = QDir{ tmpfs };
@@ -367,14 +357,10 @@ auto fixMount(ocppi::runtime::config::types::Config config) noexcept
              dir.entryInfoList(QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot)) {
             auto rootDestPath = rootDest.absoluteFilePath();
             auto destination = rootDestPath.mid(originalRoot.absolutePath().size());
-            auto mountPoint = MountType{
-                .destination = destination.toStdString(),
-                .gidMappings = {},
-                .options = { { "rbind", "ro" } },
-                .source = rootDestPath.toStdString(),
-                .type = "bind",
-                .uidMappings = {},
-            };
+            auto mountPoint = MountType{ .destination = destination.toStdString(),
+                                         .options = { { "rbind", "ro" } },
+                                         .source = rootDestPath.toStdString(),
+                                         .type = "bind" };
             if (rootDest.isSymLink()) {
                 mountPoint.options->emplace_back("copy-symlink");
             }
@@ -449,11 +435,9 @@ auto ContainerBuilder::create(const ContainerOptions &opts) noexcept
 
     originalConfig->mounts->push_back(ocppi::runtime::config::types::Mount{
       .destination = "/etc/profile.d/00env.sh",
-      .gidMappings = {},
       .options = { { "ro", "rbind" } },
       .source = envShFile,
       .type = "bind",
-      .uidMappings = {},
     });
 
     auto config = fixMount(*originalConfig);
