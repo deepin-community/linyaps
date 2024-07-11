@@ -333,8 +333,9 @@ auto fixMount(ocppi::runtime::config::types::Config config) noexcept
     auto rootBinds = originalRoot.entryInfoList(QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot);
     auto pos = mounts.begin();
     for (const auto &bind : rootBinds) {
+        auto destination = "/" + bind.fileName();
         auto mountPoint = MountType{
-            .destination = ("/" + bind.fileName()).toStdString(),
+            .destination = destination.toStdString(),
             .gidMappings = {},
             .options = { { "rbind", "ro" } },
             .source = bind.absoluteFilePath().toStdString(),
