@@ -305,15 +305,11 @@ int Cli::run(std::map<std::string, docopt::value> &args)
             "-c",
             bashArgs.join(" ").toStdString(),
         };
-
-        auto opt = ocppi::runtime::ExecOption{};
-        opt.uid = ::getuid();
-        opt.gid = ::getgid();
-
-        auto result = this->ociCLI.exec(container.id,
-                                        execArgs[0],
-                                        { execArgs.cbegin() + 1, execArgs.cend() },
-                                        opt);
+        auto result =
+          this->ociCLI.exec(container.id,
+                            execArgs[0],
+                            std::vector<std::string>(execArgs.cbegin() + 1, execArgs.cend()),
+                            ocppi::runtime::ExecOption{ .uid = ::getuid(), .gid = ::getgid() });
 
         if (!result) {
             auto err = LINGLONG_ERRV(result);
@@ -329,24 +325,19 @@ int Cli::run(std::map<std::string, docopt::value> &args)
       [&applicationMounts](const api::types::v1::ApplicationConfigurationPermissionsBind &bind) {
           applicationMounts.push_back(ocppi::runtime::config::types::Mount{
             .destination = bind.destination,
-            .gidMappings = {},
             .options = { { "rbind" } },
             .source = bind.source,
             .type = "bind",
-            .uidMappings = {},
           });
       };
-
     auto bindInnerMount =
       [&applicationMounts](
         const api::types::v1::ApplicationConfigurationPermissionsInnerBind &bind) {
           applicationMounts.push_back(ocppi::runtime::config::types::Mount{
             .destination = bind.destination,
-            .gidMappings = {},
             .options = { { "rbind" } },
             .source = "rootfs" + bind.source,
             .type = "bind",
-            .uidMappings = {},
           });
       };
 
@@ -374,17 +365,15 @@ int Cli::run(std::map<std::string, docopt::value> &args)
       .appDir = *appLayerDir,
       .patches = {},
       .mounts = std::move(applicationMounts),
-      .masks = {},
     });
     if (!container) {
         this->printer.printErr(container.error());
         return -1;
     }
 
-    ocppi::runtime::config::types::Process process{};
-    process.args = execArgs;
+    ocppi::runtime::config::types::Process p{ .args = execArgs };
 
-    auto result = (*container)->run(process);
+    auto result = (*container)->run(p);
     if (!result) {
         this->printer.printErr(result.error());
         return -1;
@@ -440,12 +429,11 @@ int Cli::exec(std::map<std::string, docopt::value> &args)
         command = { "bash", "--login" };
     }
 
-    auto opt = ocppi::runtime::ExecOption{};
-    opt.uid = ::getuid();
-    opt.gid = ::getgid();
-
     auto result =
-      this->ociCLI.exec(pagoda, command[0], { command.begin() + 1, command.end() }, opt);
+      this->ociCLI.exec(pagoda,
+                        command[0],
+                        std::vector<std::string>(command.begin() + 1, command.end()),
+                        ocppi::runtime::ExecOption{ .uid = ::getuid(), .gid = ::getgid() });
     if (!result) {
         auto err = LINGLONG_ERRV(result);
         this->printer.printErr(err);
@@ -1039,7 +1027,6 @@ int Cli::content(std::map<std::string, docopt::value> &args)
         this->printer.printErr(LINGLONG_ERR("no entries found").value());
         return -1;
     }
-
     QDirIterator it(entriesDir.absolutePath(),
                     QDir::AllEntries | QDir::NoDot | QDir::NoDotDot | QDir::System,
                     QDirIterator::Subdirectories);
