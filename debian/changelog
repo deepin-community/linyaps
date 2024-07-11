@@ -1,3 +1,13 @@
+linglong (1.5.8-1) unstable; urgency=medium
+
+  * fix: can not install linglong app from store.linglong.dev
+  * feat: ll-build appimage convert support export uab or layer
+  * feat: Optimize build progress display
+  * fix: example build error in uos20 arm arch
+  * fix: builder create return error
+
+ -- dengbo <dengbo@deepin.org>  Tue, 09 Jul 2024 16:44:15 +0800
+
 linglong (1.5.7-1) unstable; urgency=medium
 
   * fix: failed to run app after ll-cli received SIGINT
