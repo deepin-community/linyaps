@@ -89,12 +89,12 @@ QString SourceFetcher::getSourceName()
     return "unknown";
 }
 
-SourceFetcher::SourceFetcher(api::types::v1::BuilderProjectSource source,
+SourceFetcher::SourceFetcher(api::types::v1::BuilderProjectSource s,
                              api::types::v1::BuilderConfig cfg,
                              const QDir &cacheDir)
-    : cacheDir(cacheDir)
-    , source(std::move(source))
+    : source(std::move(s))
     , cfg(std::move(cfg))
+    , cacheDir(cacheDir)
 {
     if (this->cacheDir.mkpath(".")) {
         return;
