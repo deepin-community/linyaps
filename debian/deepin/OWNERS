@@ -1,0 +1,15 @@
+# See the OWNERS docs at https://go.k8s.io/owners
+
+reviewers:
+- dengbo11
+- kamiyadm
+- black-desk
+approvers:
+- Zeno-sole
+- Iceyer
+- UTsweetyfish
+- hudeng-go
+- zccrs
+- dengbo11
+- kamiyadm
+- black-desk
