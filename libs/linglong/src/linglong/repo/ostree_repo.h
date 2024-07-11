@@ -53,51 +53,15 @@ public:
                                                            const QString &subRef = "") noexcept;
 
     utils::error::Result<package::LayerDir> getLayerDir(const package::Reference &ref,
-                                                        const QString &module = "binary",
+                                                        bool develop = false,
                                                         const QString &subRef = "") const noexcept;
 
-    Q_DECL_DEPRECATED_X(R"(Use the "module" version)")
-
-    utils::error::Result<package::LayerDir> getLayerDir(const package::Reference &ref,
-                                                        bool develop,
-                                                        const QString &subRef = "") const noexcept
-    {
-        if (develop) {
-            return getLayerDir(ref, QString("develop"), subRef);
-        }
-        return getLayerDir(ref, QString("binary"), subRef);
-    }
-
     utils::error::Result<void> push(const package::Reference &reference,
-                                    const QString &module = "binary") const noexcept;
-
-    Q_DECL_DEPRECATED_X(R"(Use the "module" version)")
-
-    utils::error::Result<void> push(const package::Reference &reference,
-                                    bool develop) const noexcept
-    {
-        if (develop) {
-            return push(reference, QString("develop"));
-        }
-        return push(reference, QString("binary"));
-    }
+                                    bool develop = false) const noexcept;
 
     void pull(service::InstallTask &taskContext,
               const package::Reference &reference,
-              const QString &module = "binary") noexcept;
-
-    Q_DECL_DEPRECATED_X(R"(Use the "module" version)")
-
-    void pull(service::InstallTask &taskContext,
-              const package::Reference &reference,
-              bool develop) noexcept
-    {
-        if (develop) {
-            pull(taskContext, reference, QString("develop"));
-            return;
-        }
-        pull(taskContext, reference, QString("binary"));
-    }
+              bool develop = false) noexcept;
 
     utils::error::Result<package::Reference> clearReference(
       const package::FuzzyReference &fuzz, const clearReferenceOption &opts) const noexcept;
@@ -107,21 +71,8 @@ public:
     listRemote(const package::FuzzyReference &fuzzyRef) const noexcept;
 
     utils::error::Result<void> remove(const package::Reference &ref,
-                                      const QString &module = "binary",
+                                      bool develop = false,
                                       const QString &subRef = "") noexcept;
-
-    Q_DECL_DEPRECATED_X(R"(Use the "module" version)")
-
-    utils::error::Result<void> remove(const package::Reference &ref,
-                                      bool develop,
-                                      const QString &subRef = "") noexcept
-    {
-        if (develop) {
-            return remove(ref, QString("develop"), subRef);
-        }
-        return remove(ref, QString("binary"), subRef);
-    }
-
     utils::error::Result<void> prune();
 
     void removeDanglingXDGIntergation() noexcept;
@@ -147,7 +98,7 @@ private:
     QDir repoDir;
     QDir ostreeRepoDir() const noexcept;
     QDir createLayerQDir(const package::Reference &ref,
-                         const QString &module = "binary",
+                         bool develop = false,
                          const QString &subRef = "") const noexcept;
 
     ClientFactory &m_clientFactory;
