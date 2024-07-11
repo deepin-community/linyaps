@@ -28,8 +28,9 @@ ifeq ($(ENABLE_UAB_SUPPORT), TRUE)
 override_dh_auto_install:
 	dh_auto_install
 
-	install -d debian/linglong-builder/usr/share/linglong/builder/uab
-	dh_install -p linglong-builder usr/share/linglong/builder/uab/ usr/share/linglong/builder/
+	install -d debian/linglong-builder/usr/lib/$(ARCH)/linglong/builder/uab
+	dh_install -p linglong-builder usr/lib/$(ARCH)/linglong/builder/uab/ usr/lib/$(ARCH)/linglong/builder/
+	dh_install -p linglong-box usr/bin/ll-box-static usr/bin
 endif
 
 override_dh_auto_configure:
