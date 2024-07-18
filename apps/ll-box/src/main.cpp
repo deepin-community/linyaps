@@ -195,8 +195,7 @@ int exec(struct arg_exec *arg, int argc, char **argv) noexcept
         newArgv[i + nsenterArgc] = argv[i + 1];
     }
 
-    newArgv[newArgc - 2] = "&";
-    newArgv[newArgc - 1] = nullptr;
+    newArgv.push_back(nullptr);
 
     for (int i = 0; i < newArgc; ++i) {
         logDbg() << "newArgv[" << i << "]:" << newArgv[i];
