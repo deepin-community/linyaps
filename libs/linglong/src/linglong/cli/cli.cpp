@@ -304,6 +304,7 @@ int Cli::run(std::map<std::string, docopt::value> &args)
             "--login",
             "-c",
             bashArgs.join(" ").toStdString(),
+            "; wait"
         };
         auto result =
           this->ociCLI.exec(container.id,
@@ -424,6 +425,7 @@ int Cli::exec(std::map<std::string, docopt::value> &args)
             "--login",
             "-c",
             bashArgs.join(" ").toStdString(),
+            "; wait"
         };
     } else {
         command = { "bash", "--login" };

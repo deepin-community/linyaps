@@ -174,34 +174,19 @@ int exec(struct arg_exec *arg, int argc, char **argv) noexcept
     }
 
     auto wdns = linglong::util::format("--wdns=%s", arg->cwd.c_str());
-    const char *nsenterArgv[] = { "nsenter", "-t",         boxPidStr.c_str(),        "-U",   "-m",
-                                  "-p",      wdns.c_str(), "--preserve-credentials", nullptr };
-
-    int nsenterArgc{ 0 };
-    while (nsenterArgv[nsenterArgc] != nullptr) {
-        ++nsenterArgc;
-    }
-    auto newArgc = nsenterArgc + argc + 1; // except argv[0] and add '&'
-    const char **newArgv = (const char **)malloc(sizeof(char *) * newArgc);
-
-    if (newArgv == nullptr) {
-        logErr() << "malloc error";
-        return errno;
-    }
-    for (int i = 0; i < nsenterArgc; ++i) {
-        newArgv[i] = nsenterArgv[i];
-    }
+    std::vector<const char *> newArgv{
+        "nsenter", "-t", boxPidStr.c_str(), "-U", "-m", "-p", wdns.c_str(), "--preserve-credentials"
+    };
     for (int i = 0; i < argc; ++i) {
-        newArgv[i + nsenterArgc] = argv[i + 1];
+        newArgv.push_back(argv[i + 1]);
     }
 
-    newArgv[newArgc - 2] = "&";
-    newArgv[newArgc - 1] = nullptr;
+    newArgv.push_back(nullptr);
 
-    for (int i = 0; i < newArgc; ++i) {
+    for (decltype(newArgv.size()) i = 0; i < newArgv.size(); ++i) {
         logDbg() << "newArgv[" << i << "]:" << newArgv[i];
     }
-    return ::execvp("nsenter", const_cast<char **>(newArgv));
+    return ::execvp("nsenter", const_cast<char **>(newArgv.data())); // NOLINT
 }
 
 int run(struct arg_run *arg, const std::string &container) noexcept
