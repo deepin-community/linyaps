@@ -162,14 +162,6 @@ Container::run(const ocppi::runtime::config::types::Process &process) noexcept
       .type = "bind",
     });
 
-    symlink("/run/linglong/etc/ld.so.cache", bundle.absoluteFilePath("ld.so.cache").toUtf8());
-    this->cfg.mounts->push_back(ocppi::runtime::config::types::Mount{
-      .destination = "/etc/ld.so.cache",
-      .options = { { "rbind", "ro", "nosymfollow" } },
-      .source = bundle.absoluteFilePath("ld.so.cache").toStdString(),
-      .type = "bind",
-    });
-
     nlohmann::json json = this->cfg;
 
     {
