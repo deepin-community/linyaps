@@ -2,7 +2,7 @@
 include /usr/share/dpkg/pkg-info.mk
 
 OS=$(shell awk '/^NAME=/' /etc/os-release | sed 's/NAME=//' | sed 's/\"//g' | tr '[:upper:]' '[:lower:]')
-ARCH=$(shell dpkg-architecture -qDEB_TARGET_GNU_TYPE)
+ARCH=$(shell dpkg-architecture -qDEB_TARGET_MULTIARCH)
 VERSION=$(shell awk '/VERSION=/' /etc/os-release | sed 's/VERSION=//' | sed 's/\"//g' | sed 's/[.]0/./')
 ENABLE_UAB_SUPPORT=FALSE
 
@@ -19,7 +19,7 @@ override_dh_auto_install:
 	dh_auto_install
 	dh_install -p linglong-bin debian/sysctl.d/linglong.conf usr/lib/sysctl.d/
 
-EXTRA_OPTION = -DCPM_LOCAL_PACKAGES_ONLY=ON -DLINGLONG_VERSION=$(DEB_VERSION_UPSTREAM) -DENABLE_LINGLONG_INSTALLER=ON
+EXTRA_OPTION = -DCPM_LOCAL_PACKAGES_ONLY=ON -DLINGLONG_VERSION=$(DEB_VERSION_UPSTREAM) -DENABLE_LINGLONG_INSTALLER=ON -DCMAKE_INSTALL_LIBDIR=$(ARCH)
 
 ifeq ($(ENABLE_UAB_SUPPORT), TRUE)
 
