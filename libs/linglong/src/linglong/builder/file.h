@@ -8,6 +8,7 @@
 #define LINGLONG_SRC_MODULE_UTIL_FILE_H_
 
 #include "linglong/utils/configure.h"
+#include "linglong/utils/error/error.h"
 
 #include <QCryptographicHash>
 #include <QDebug>
@@ -168,54 +169,70 @@ bool inline linkFile(const QString &src, const QString &dest, const bool /*overr
  * @param dst 目标
  * @return
  */
-void inline copyDir(const QString &src, const QString &dst)
+utils::error::Result<void> inline copyDir(const QString &src, const QString &dst)
 {
+    LINGLONG_TRACE(QString("copy %1 to %2").arg(src).arg(dst));
+
     QDir srcDir(src);
     QDir dstDir(dst);
 
     if (!dstDir.exists()) {
-        dstDir.mkpath(".");
+        if (!dstDir.mkpath(".")) {
+            return LINGLONG_ERR("create " + dstDir.absolutePath() + ": failed");
+        };
     }
 
     QFileInfoList list = srcDir.entryInfoList();
-
     for (const auto &info : list) {
         if (info.fileName() == "." || info.fileName() == "..") {
             continue;
         }
+
         if (info.isDir()) {
             // 穿件文件夹，递归调用
-            copyDir(info.filePath(), dst + "/" + info.fileName());
+            auto ret = copyDir(info.filePath(), dst + "/" + info.fileName());
+            if (!ret.has_value()) {
+                return ret;
+            }
             continue;
         }
-        if (info.isSymLink()) {
-            char buf[PATH_MAX];
-            auto size = readlink(info.filePath().toStdString().c_str(), buf, sizeof(buf) - 1);
-            if (size == -1) {
-                qWarning() << "readlink failed! " << info.filePath();
-                continue;
-            }
-            buf[size] = '\0';
-            QFileInfo originFile(info.symLinkTarget());
-            QString newLinkFile = dst + "/" + info.fileName();
 
-            if (QString(buf).startsWith("/")) {
-                QFile::link(info.symLinkTarget(), newLinkFile);
-            } else {
-                // caculator the relative path
-                QDir linkFileDir(info.dir());
-                QString relativePath = linkFileDir.relativeFilePath(originFile.path());
-                auto newOriginFile = relativePath.endsWith("/")
-                  ? relativePath + originFile.fileName()
-                  : relativePath + "/" + originFile.fileName();
-                QFile::link(newOriginFile, newLinkFile);
-            }
+        if (!info.isSymLink()) {
+            // 拷贝文件
+            QFile file(info.filePath());
+            if (!file.copy(dst + "/" + info.fileName())) {
+                return LINGLONG_ERR(file);
+            };
             continue;
         }
-        // 拷贝文件
-        QFile file(info.filePath());
-        file.copy(dst + "/" + info.fileName());
+
+        std::array<char, PATH_MAX + 1> buf{};
+        auto size = readlink(info.filePath().toStdString().c_str(), buf.data(), PATH_MAX);
+        if (size == -1) {
+            return LINGLONG_ERR("readlink failed! " + info.filePath());
+        }
+
+        QFileInfo originFile(info.symLinkTarget());
+        QString newLinkFile = dst + "/" + info.fileName();
+
+        if (buf.at(0) == '/') {
+            if (!QFile::link(info.symLinkTarget(), newLinkFile)) {
+                return LINGLONG_ERR("Failed to create link: " + QFile().errorString());
+            };
+            continue;
+        }
+
+        // caculator the relative path
+        QDir linkFileDir(info.dir());
+        QString relativePath = linkFileDir.relativeFilePath(originFile.path());
+        auto newOriginFile = relativePath.endsWith("/")
+          ? relativePath + originFile.fileName()
+          : relativePath + "/" + originFile.fileName();
+        if (!QFile::link(newOriginFile, newLinkFile)) {
+            return LINGLONG_ERR("Failed to create link: " + QFile().errorString());
+        };
     }
+    return LINGLONG_OK;
 }
 
 /*!
