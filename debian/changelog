@@ -1,3 +1,11 @@
+linglong (1.5.9-1) unstable; urgency=medium
+
+  * fix: Correct application's systemd service functionality
+  * fix: error when pulling source code with git
+  * fix: failed to build deb in uos i386 arch
+
+ -- dengbo <dengbo@deepin.org>  Mon, 29 Jul 2024 10:58:54 +0800
+
 linglong (1.5.8-1) unstable; urgency=medium
 
   * fix: can not install linglong app from store.linglong.dev
