@@ -243,6 +243,10 @@ QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd) 
           }
 
           pullDependency(taskRef, *info, isDevelop);
+          if (taskRef.currentStatus() == InstallTask::Failed
+              || taskRef.currentStatus() == InstallTask::Canceled) {
+              return;
+          }
 
           if (taskRef.currentStatus() == InstallTask::Failed
               || taskRef.currentStatus() == InstallTask::Canceled) {
@@ -685,6 +689,12 @@ void PackageManager::installRef(InstallTask &taskContext,
     }
 
     pullDependency(taskContext, *info, develop);
+
+    // check the status of pull runtime and foundation
+    if (taskContext.currentStatus() == InstallTask::Failed
+        || taskContext.currentStatus() == InstallTask::Canceled) {
+        return;
+    }
 
     // check the status of pull runtime and foundation
     if (taskContext.currentStatus() == InstallTask::Failed
