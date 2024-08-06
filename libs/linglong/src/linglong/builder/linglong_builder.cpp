@@ -264,6 +264,10 @@ utils::error::Result<void> splitDevelop(QString installFilepath,
         if (rule.startsWith("#")) {
             continue;
         }
+        // 跳过注释
+        if (rule.startsWith("#")) {
+            continue;
+        }
         // 如果不以^符号开头，当作普通路径使用
         if (!rule.startsWith("^")) {
             // replace $prefix with $PROJECT_ROOT/output/$model/files
