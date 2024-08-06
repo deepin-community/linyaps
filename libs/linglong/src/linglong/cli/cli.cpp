@@ -910,19 +910,19 @@ int Cli::repo(std::map<std::string, docopt::value> &args)
         return 0;
     }
 
-    std::string url;
+    QString url;
     if (args["--name"].isString()) {
         cfg->defaultRepo = args["--name"].asString();
     }
     if (args["URL"].isString()) {
-        url = args["URL"].asString();
+        url = QString::fromStdString(args["URL"].asString());
         // remove last slash
-        if (url.at(url.length() - 1) == '/') {
-            url.pop_back();
+        if (url.endsWith("/")) {
+            url.chop(1);
         }
     }
 
-    cfg->repos[cfg->defaultRepo] = url;
+    cfg->repos[cfg->defaultRepo] = url.toStdString();
     this->pkgMan.setConfiguration(utils::serialize::toQVariantMap(*cfg));
     return 0;
 }
