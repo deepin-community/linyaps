@@ -1,3 +1,13 @@
+linglong (1.6.0-1) unstable; urgency=medium
+
+  * feat: Check if the app ID conforms to the rules
+  * fix: app exists after the installation job canceled
+  * fix: automatic updates will break the base env
+  * fix: the upgrade service affects system startup time
+  * fix: chromium timezone show error
+
+ -- dengbo <dengbo@deepin.org>  Wed, 07 Aug 2024 13:20:49 +0800
+
 linglong (1.5.9-1) unstable; urgency=medium
 
   * fix: Correct application's systemd service functionality
