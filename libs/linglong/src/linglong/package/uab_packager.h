@@ -17,6 +17,9 @@
 #include <QString>
 #include <QUuid>
 
+#include <filesystem>
+#include <unordered_set>
+
 namespace linglong::package {
 
 Q_DECLARE_LOGGING_CATEGORY(uab_packager)
