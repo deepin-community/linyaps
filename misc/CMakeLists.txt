@@ -43,8 +43,6 @@ configure_files(
   share/linglong/builder/config-check.sh
   share/linglong/builder/ldd-check.sh
   share/linglong/builder/main-check.sh
-  share/linglong/builder/templates/appimage-local.yaml
-  share/linglong/builder/templates/appimage-url.yaml
   share/linglong/builder/templates/example.yaml
   share/linglong/config.yaml
   share/mime/packages/deepin-linglong.xml
