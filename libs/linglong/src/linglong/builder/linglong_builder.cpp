@@ -612,7 +612,7 @@ utils::error::Result<void> Builder::build(const QStringList &args) noexcept
     }
     auto output = utils::command::Exec(
       "bash",
-      QStringList() << scriptFile << QString::fromStdString(this->project.package.id)
+      QStringList() << "-e" << scriptFile << QString::fromStdString(this->project.package.id)
                     << developOutput.absolutePath());
     if (!output) {
         return LINGLONG_ERR(output);
