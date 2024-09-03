@@ -766,7 +766,7 @@ utils::error::Result<void> Builder::build(const QStringList &args) noexcept
                         .arg("committing")
                         .toStdString(),
                       2);
-    qDebug() << "import binrary to layers";
+    qDebug() << "import binary to layers";
     package::LayerDir binaryOutputLayerDir = binaryOutput.absoluteFilePath("..");
     result = this->repo.remove(*ref);
     if (!result) {
