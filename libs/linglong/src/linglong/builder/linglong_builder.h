@@ -42,7 +42,7 @@ public:
       -> utils::error::Result<void>;
     auto exportLayer(const QString &destination) -> utils::error::Result<void>;
 
-    auto extractLayer(const QString &layerPath, const QString &destination)
+    static auto extractLayer(const QString &layerPath, const QString &destination)
       -> utils::error::Result<void>;
 
     auto push(bool pushWithDevel = true, const QString &repoName = "", const QString &repoUrl = "")
