@@ -1,3 +1,9 @@
+linglong (1.6.1-1) unstable; urgency=medium
+
+  * chore: adjust XDG_DATA_DIRS environment
+
+ -- dengbo <dengbo@deepin.org>  Thu, 05 Sep 2024 17:15:50 +0800
+
 linglong (1.6.0-1) unstable; urgency=medium
 
   * feat: Check if the app ID conforms to the rules
