@@ -20,7 +20,6 @@ configure_files(
   libexec/linglong/fetch-dsc-source
   libexec/linglong/fetch-file-source
   libexec/linglong/fetch-git-source
-  libexec/linglong/upgrade-all
   lib/linglong/container/config.d/10-basics.json
   lib/linglong/container/config.d/25-host-rootfs.json
   lib/linglong/container/config.d/25-host-statics.json
@@ -31,8 +30,6 @@ configure_files(
   lib/systemd/system/org.deepin.linglong.PackageManager.service
   lib/systemd/system-preset/91-linglong.preset
   lib/systemd/user/linglong-session-helper.service
-  lib/systemd/user/linglong-upgrade.service
-  lib/systemd/user/linglong-upgrade.timer
   lib/sysusers.d/linglong.conf
   lib/tmpfiles.d/linglong.conf
   script/linglong-repair-tool
@@ -43,11 +40,6 @@ configure_files(
   share/bash-completion/completions/ll-cli
   share/dbus-1/system.d/org.deepin.linglong.PackageManager.conf
   share/dbus-1/system-services/org.deepin.linglong.PackageManager.service
-  share/linglong/builder/config-check.sh
-  share/linglong/builder/ldd-check.sh
-  share/linglong/builder/main-check.sh
-  share/linglong/builder/templates/appimage-local.yaml
-  share/linglong/builder/templates/appimage-url.yaml
   share/linglong/builder/templates/example.yaml
   share/linglong/config.yaml
   share/mime/packages/deepin-linglong.xml

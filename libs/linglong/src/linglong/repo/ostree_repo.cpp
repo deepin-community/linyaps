@@ -230,7 +230,7 @@ QString ostreeSpecFromReferenceV2(const package::Reference &ref,
         return ret + _module;
     }
 
-    return ret + _module + "/" + subRef;
+    return ret + "_" + subRef;
 }
 
 utils::error::Result<void> removeOstreeRef(OstreeRepo *repo, const char *ref) noexcept
@@ -347,8 +347,8 @@ utils::error::Result<void> handleRepositoryUpdate(OstreeRepo *repo,
         isMinified = true;
         auto newName =
           QDir::cleanPath(layerDir.absoluteFilePath(QString{ "../%1" }.arg(minifiedJson)));
-        if (!QFile::copy(newName, minified.absoluteFilePath())) {
-            return LINGLONG_ERR("couldn't move minified.json to parent directory");
+        if (!QFile::copy(minified.absoluteFilePath(), newName)) {
+            return LINGLONG_ERR("couldn't copy minified.json to parent directory");
         }
         minified.setFile(newName);
     }
@@ -363,7 +363,7 @@ utils::error::Result<void> handleRepositoryUpdate(OstreeRepo *repo,
         return LINGLONG_ERR(QString{ "couldn't remove directory %1" }.arg(layerDir.absolutePath()));
     }
 
-    auto recheckMinifiedLayer =
+    auto restoreMinifiedJson =
       utils::finally::finally([isMinified,
                                refspec,
                                &layerDir,
@@ -375,65 +375,14 @@ utils::error::Result<void> handleRepositoryUpdate(OstreeRepo *repo,
               return;
           }
 
-          QDir minifiedDir = layerDir.absoluteFilePath("minified");
-          if (!minifiedDir.mkpath(".")) {
-              qCritical() << "couldn't create minified directory";
-              return;
-          }
-
           if (!QFile::copy(currentName, originalName)) {
-              qCritical() << "couldn't move" << currentName << "to" << originalName;
+              qCritical() << "couldn't copy" << currentName << "to" << originalName;
               return;
           }
 
-          auto minifiedJsonRet =
-            utils::serialize::LoadJSONFile<api::types::v1::MinifiedInfo>(originalName);
-          if (!minifiedJsonRet) {
-              qCritical() << minifiedJsonRet.error().message();
-              return;
-          }
-          const auto &minifiedJson = *minifiedJsonRet;
-
-          for (const auto &item : minifiedJson.infos) {
-              QDir specLayerDir = minifiedDir.absoluteFilePath(QString::fromStdString(item.uuid));
-              if (!specLayerDir.mkpath(".")) {
-                  qCritical() << "couldn't create directory" << specLayerDir.absolutePath();
-                  return;
-              }
-              auto minifiedSpecRef =
-                QByteArray{ refspec } + "/minified/" + QByteArray::fromStdString(item.uuid);
-
-              g_autoptr(GError) gErr{ nullptr };
-              g_autofree char *commit{ nullptr };
-              if (ostree_repo_resolve_rev_ext( // only resolve local ref
-                    repo,
-                    refspec,
-                    FALSE,
-                    OstreeRepoResolveRevExtFlags::
-                      OSTREE_REPO_RESOLVE_REV_EXT_NONE, // The flag
-                                                        // OSTREE_REPO_RESOLVE_REV_EXT_LOCAL_ONLY
-                                                        // is implied so using it has no effect.
-                    &commit,
-                    &gErr)
-                  == FALSE) {
-                  qCritical() << "ostree_repo_resolve_rev" << gErr;
-                  return;
-              }
-
-              auto destPath = (minifiedDir.absolutePath().mid(1) + QDir::separator()
-                               + QString::fromStdString(item.uuid))
-                                .toLocal8Bit();
-              if (ostree_repo_checkout_at(repo,
-                                          nullptr,
-                                          root,
-                                          destPath.constData(),
-                                          commit,
-                                          nullptr,
-                                          &gErr)
-                  == FALSE) {
-                  qCritical() << "ostree_repo_checkout_at" << destPath << ":" << gErr;
-                  return;
-              }
+          if (!QFile::remove(currentName)) {
+              qWarning() << "couldn't remove " << currentName
+                         << ",please remove this file manually";
           }
       });
 
@@ -554,7 +503,7 @@ utils::error::Result<package::Reference> clearReferenceLocal(const package::Fuzz
 {
     LINGLONG_TRACE("clear fuzzy reference locally");
 
-    auto arch = package::Architecture::parse(QSysInfo::currentCpuArchitecture());
+    auto arch = package::Architecture::currentCPUArchitecture();
     if (fuzzy.arch) {
         arch = *fuzzy.arch;
     }
@@ -663,7 +612,7 @@ utils::error::Result<package::Reference> clearReferenceRemote(const package::Fuz
         req.setArch(fuzzy.arch->toString());
     } else {
         // NOTE: Server requires that arch is set, but why?
-        req.setArch(QSysInfo::currentCpuArchitecture());
+        req.setArch(package::Architecture::currentCPUArchitecture()->toString());
     }
 
     req.setRepoName(repoName);
@@ -697,7 +646,7 @@ utils::error::Result<package::Reference> clearReferenceRemote(const package::Fuz
                   continue;
               }
 
-              auto arch = package::Architecture::parse(record.getArch());
+              auto arch = package::Architecture::parse(record.getArch().toStdString());
               if (!arch) {
                   qWarning() << "Ignore invalid package record" << record.asJson() << arch.error();
                   continue;
@@ -1163,7 +1112,7 @@ utils::error::Result<void> OSTreeRepo::remove(const package::Reference &ref,
 
     for (const auto &entry :
          layerDir.entryInfoList(QDir::NoDotAndDotDot | QDir::AllDirs | QDir::Files)) {
-        if (entry.fileName().startsWith("minified")) {
+        if (entry.fileName() == "minified.json") {
             continue;
         }
 
@@ -1409,7 +1358,7 @@ OSTreeRepo::listRemote(const package::FuzzyReference &fuzzyRef) const noexcept
     if (fuzzyRef.arch) {
         req.setArch(fuzzyRef.arch->toString());
     } else {
-        req.setArch(QSysInfo::currentCpuArchitecture());
+        req.setArch(package::Architecture::currentCPUArchitecture()->toString());
     }
     if (fuzzyRef.channel) {
         req.setChannel(*fuzzyRef.channel);

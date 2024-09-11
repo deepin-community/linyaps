@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-#ifndef UAB_PACKAGER_H
-#define UAB_PACKAGER_H
+#pragma once
 
 #include "linglong/api/types/v1/UabMetaInfo.hpp"
 #include "linglong/package/layer_dir.h"
@@ -67,22 +66,26 @@ public:
 
     UABPackager(UABPackager &&) = delete;
 
-    utils::error::Result<void> setIcon(const QFileInfo &icon);
-    utils::error::Result<void> appendLayer(const LayerDir &layer);
-    utils::error::Result<void> pack(const QString &uabFilename);
+    utils::error::Result<void> setIcon(const QFileInfo &icon) noexcept;
+    utils::error::Result<void> appendLayer(const LayerDir &layer) noexcept;
+    utils::error::Result<void> pack(const QString &uabFilename) noexcept;
+    utils::error::Result<void> exclude(const std::vector<std::string> &files) noexcept;
+    utils::error::Result<void> include(const std::vector<std::string> &files) noexcept;
 
 private:
     [[nodiscard]] utils::error::Result<void> packIcon() noexcept;
     [[nodiscard]] utils::error::Result<void> packBundle() noexcept;
     [[nodiscard]] utils::error::Result<void> prepareBundle(const QDir &bundleDir) noexcept;
     [[nodiscard]] utils::error::Result<void> packMetaInfo() noexcept;
+    [[nodiscard]] utils::error::Result<std::pair<bool, std::unordered_set<std::string>>>
+    filteringFiles(const LayerDir &layer) const noexcept;
 
     elfHelper uab;
     QList<LayerDir> layers;
+    std::unordered_set<std::string> excludeFiles;
+    std::unordered_set<std::string> includeFiles;
     std::optional<QFileInfo> icon{ std::nullopt };
     api::types::v1::UabMetaInfo meta;
     QDir buildDir;
 };
 } // namespace linglong::package
-
-#endif

@@ -136,7 +136,7 @@ Container::run(const ocppi::runtime::config::types::Process &process) noexcept
 
     this->cfg.process->env = originEnvs;
 
-    auto arch = package::Architecture::parse(QSysInfo::currentCpuArchitecture());
+    auto arch = package::Architecture::currentCPUArchitecture();
     if (!arch) {
         return LINGLONG_ERR(arch);
     }
@@ -160,6 +160,7 @@ Container::run(const ocppi::runtime::config::types::Process &process) noexcept
       .options = { { "ro", "rbind" } },
       .source = bundle.absoluteFilePath("zz_deepin-linglong-app.ld.so.conf").toStdString(),
       .type = "bind",
+      .uidMappings = {},
     });
 
     nlohmann::json json = this->cfg;

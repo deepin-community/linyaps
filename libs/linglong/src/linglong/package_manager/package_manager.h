@@ -4,8 +4,7 @@
  * SPDX-License-Identifier: LGPL-3.0-or-later
  */
 
-#ifndef LINGLONG_SRC_PACKAGE_MANAGER_PACKAGE_MANAGER_H_
-#define LINGLONG_SRC_PACKAGE_MANAGER_PACKAGE_MANAGER_H_
+#pragma once
 
 #include "linglong/repo/ostree_repo.h"
 #include "task.h"
@@ -31,9 +30,7 @@ public:
     PackageManager(PackageManager &&) = delete;
     auto operator=(const PackageManager &) -> PackageManager & = delete;
     auto operator=(PackageManager &&) -> PackageManager & = delete;
-    void Install(InstallTask &taskContext,
-                 const package::Reference &ref,
-                 bool devel) noexcept;
+    void Install(InstallTask &taskContext, const package::Reference &ref, bool devel) noexcept;
     void Update(InstallTask &taskContext,
                 const package::Reference &ref,
                 const package::Reference &newRef,
@@ -56,7 +53,7 @@ Q_SIGNALS:
 private:
     QVariantMap installFromLayer(const QDBusUnixFileDescriptor &fd) noexcept;
     QVariantMap installFromUAB(const QDBusUnixFileDescriptor &fd) noexcept;
-    utils::error::Result<api::types::v1::MinifiedInfo>
+    static utils::error::Result<api::types::v1::MinifiedInfo>
     updateMinifiedInfo(const QFileInfo &file, const QString &appRef, const QString &uuid) noexcept;
     void pullDependency(InstallTask &taskContext,
                         const api::types::v1::PackageInfoV2 &info,
@@ -66,5 +63,3 @@ private:
 };
 
 } // namespace linglong::service
-
-#endif

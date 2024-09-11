@@ -10,9 +10,12 @@
 #include "linglong/utils/command/env.h"
 #include "linglong/utils/configure.h"
 
+#include <yaml-cpp/yaml.h>
+
 #include <QCryptographicHash>
 #include <QStandardPaths>
 
+#include <unordered_set>
 #include <utility>
 
 #include <fcntl.h>
@@ -140,7 +143,7 @@ UABPackager::~UABPackager()
     }
 }
 
-utils::error::Result<void> UABPackager::setIcon(const QFileInfo &newIcon)
+utils::error::Result<void> UABPackager::setIcon(const QFileInfo &newIcon) noexcept
 {
     LINGLONG_TRACE("append icon to uab")
 
@@ -156,7 +159,7 @@ utils::error::Result<void> UABPackager::setIcon(const QFileInfo &newIcon)
     return LINGLONG_OK;
 }
 
-utils::error::Result<void> UABPackager::appendLayer(const LayerDir &layer)
+utils::error::Result<void> UABPackager::appendLayer(const LayerDir &layer) noexcept
 {
     LINGLONG_TRACE("append layer to uab")
 
@@ -168,7 +171,35 @@ utils::error::Result<void> UABPackager::appendLayer(const LayerDir &layer)
     return LINGLONG_OK;
 }
 
-utils::error::Result<void> UABPackager::pack(const QString &uabFilename)
+utils::error::Result<void> UABPackager::exclude(const std::vector<std::string> &files) noexcept
+{
+    LINGLONG_TRACE("append excluding files")
+    for (const auto &file : files) {
+        if (file.empty() || (file.at(0) != '/')) {
+            return LINGLONG_ERR("invalid format, excluding file:" + QString::fromStdString(file));
+        }
+
+        excludeFiles.insert(file);
+    }
+
+    return LINGLONG_OK;
+}
+
+utils::error::Result<void> UABPackager::include(const std::vector<std::string> &files) noexcept
+{
+    LINGLONG_TRACE("append including files")
+    for (const auto &file : files) {
+        if (file.empty() || (file.at(0) != '/')) {
+            return LINGLONG_ERR("invalid format, including file:" + QString::fromStdString(file));
+        }
+
+        includeFiles.insert(file);
+    }
+
+    return LINGLONG_OK;
+}
+
+utils::error::Result<void> UABPackager::pack(const QString &uabFilename) noexcept
 {
     LINGLONG_TRACE("package uab")
 
@@ -307,19 +338,20 @@ utils::error::Result<void> UABPackager::prepareBundle(const QDir &bundleDir) noe
               QString{ "couldn't create directory %1" }.arg(moduleDir.absolutePath()));
         }
 
-        // copy all files currently
-        for (const auto &info :
-             layer.entryInfoList(QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot)) {
-            const auto &componentName = info.fileName();
-            if (componentName.startsWith("minified")) {
-                continue;
-            }
+        auto ret = filteringFiles(layer);
+        if (!ret) {
+            return LINGLONG_ERR(ret);
+        }
+        const auto &[minified, files] = *ret;
 
-            std::error_code ec;
+        // first step, copy files which in layer directory
+        std::error_code ec;
+        for (const auto &info : layer.entryInfoList(QDir::Files | QDir::NoDotAndDotDot)) {
+            const auto &componentName = info.fileName();
+
             std::filesystem::copy(info.absoluteFilePath().toStdString(),
                                   moduleDir.absoluteFilePath(componentName).toStdString(),
                                   std::filesystem::copy_options::copy_symlinks
-                                    | std::filesystem::copy_options::recursive
                                     | std::filesystem::copy_options::update_existing,
                                   ec);
             if (ec) {
@@ -329,7 +361,70 @@ utils::error::Result<void> UABPackager::prepareBundle(const QDir &bundleDir) noe
             }
         };
 
-        this->meta.layers.push_back({ .info = info, .minified = false });
+        // second step, copy files which has been filtered
+        auto basePath = std::filesystem::path{ layer.filesDirPath().toStdString() };
+        if (!basePath.has_filename()) {
+            return LINGLONG_ERR("the name of files directory is empty");
+        }
+
+        auto moduleFilesDir = moduleDir.absolutePath().toStdString() / basePath.filename();
+        if (!std::filesystem::create_directories(moduleFilesDir, ec) && ec) {
+            return LINGLONG_ERR(QString{ "couldn't create directory: %1, error: %2" }
+                                  .arg(QString::fromStdString(moduleFilesDir.string()))
+                                  .arg(QString::fromStdString(ec.message())));
+        }
+
+        for (const auto &source : files) {
+            auto destination =
+              moduleFilesDir / std::filesystem::path{ source }.lexically_relative(basePath);
+
+            // Ensure that the parent directory exists
+            if (!std::filesystem::create_directories(destination.parent_path(), ec) && ec) {
+                return LINGLONG_ERR("couldn't create directories "
+                                    % QString::fromStdString(destination.parent_path().string()
+                                                             + ":" + ec.message()));
+            }
+
+            if (std::filesystem::is_symlink(source, ec)) {
+                std::filesystem::copy_symlink(source, destination, ec);
+                if (ec) {
+                    return LINGLONG_ERR("couldn't copy symlink from "
+                                        % QString::fromStdString(source) % " to "
+                                        % QString::fromStdString(destination.string()) % " "
+                                        % QString::fromStdString(ec.message()));
+                }
+
+                continue;
+            }
+            if (ec) {
+                return LINGLONG_ERR(
+                  QString{ "is_symlink error:%1" }.arg(QString::fromStdString(ec.message())));
+            }
+
+            if (std::filesystem::is_directory(source, ec)) {
+                if (!std::filesystem::create_directories(destination, ec) && ec) {
+                    return LINGLONG_ERR(QString{ "couldn't create directory: %1, error: %2" }
+                                          .arg(QString::fromStdString(destination.string()))
+                                          .arg(QString::fromStdString(ec.message())));
+                }
+
+                continue;
+            }
+            if (ec) {
+                return LINGLONG_ERR(
+                  QString{ "is_directory error:%1" }.arg(QString::fromStdString(ec.message())));
+            }
+
+            std::filesystem::create_hard_link(source, destination, ec);
+            if (ec) {
+                return LINGLONG_ERR("couldn't link from " % QString::fromStdString(source) % " to "
+                                    % QString::fromStdString(destination.string()) % " "
+                                    % QString::fromStdString(ec.message()));
+            }
+        }
+
+        // third step, update meta infomation
+        this->meta.layers.push_back({ .info = info, .minified = minified });
         if (info.kind == "app") {
             appID = QString::fromStdString(info.id);
         }
@@ -401,7 +496,7 @@ utils::error::Result<void> UABPackager::prepareBundle(const QDir &bundleDir) noe
     }
 
     // generate ld configs
-    auto arch = Architecture::parse(QSysInfo::currentCpuArchitecture());
+    auto arch = Architecture::currentCPUArchitecture();
     auto ldConfsDir = QDir{ extraDir.absoluteFilePath("ld.conf.d") };
     if (!ldConfsDir.mkpath(".")) {
         return LINGLONG_ERR(
@@ -454,7 +549,9 @@ utils::error::Result<void> UABPackager::packBundle() noexcept
             return ret;
         }
 
-        if (auto ret = utils::command::Exec("mkfs.erofs", { bundleFile, bundleDir.absolutePath() });
+        if (auto ret =
+              utils::command::Exec("mkfs.erofs",
+                                   { "-zlz4hc,9", "-b4096", bundleFile, bundleDir.absolutePath() });
             !ret) {
             return LINGLONG_ERR(ret);
         }
@@ -502,6 +599,97 @@ utils::error::Result<void> UABPackager::packMetaInfo() noexcept
     }
 
     return LINGLONG_OK;
+}
+
+utils::error::Result<std::pair<bool, std::unordered_set<std::string>>>
+UABPackager::filteringFiles(const LayerDir &layer) const noexcept
+{
+    LINGLONG_TRACE("filtering files in layer directory")
+
+    auto filesDir = layer.filesDirPath();
+    if (!QFileInfo::exists(filesDir)) {
+        return LINGLONG_ERR(
+          QString{ "there isn't a files dir in layer %1" }.arg(layer.absolutePath()));
+    }
+
+    auto expandPaths = [prefix = std::filesystem::path{ filesDir.toStdString() }](
+                         const std::unordered_set<std::string> &originalFiles)
+      -> utils::error::Result<std::unordered_set<std::string>> {
+        LINGLONG_TRACE("expand all filters")
+        std::unordered_set<std::string> expandFiles;
+        std::error_code ec;
+
+        for (const auto &originalEntry : originalFiles) {
+            auto entry = prefix / originalEntry.substr(1);
+            if (!std::filesystem::exists(entry, ec)) {
+                if (ec) {
+                    return LINGLONG_ERR(QString::fromStdString(ec.message()));
+                }
+                continue;
+            }
+
+            if (std::filesystem::is_regular_file(entry, ec)) {
+                expandFiles.insert(entry);
+                continue;
+            }
+            if (ec) {
+                return LINGLONG_ERR(QString::fromStdString(ec.message()));
+            }
+
+            if (std::filesystem::is_directory(entry, ec)) {
+                auto iterator = std::filesystem::recursive_directory_iterator(entry, ec);
+                if (ec) {
+                    return LINGLONG_ERR(QString::fromStdString(ec.message()));
+                }
+
+                for (const auto &file : iterator) {
+                    expandFiles.insert(file.path().string());
+                }
+            }
+            if (ec) {
+                return LINGLONG_ERR(QString::fromStdString(ec.message()));
+            }
+        }
+
+        return expandFiles;
+    };
+
+    auto expandedExcludesRet = expandPaths(excludeFiles);
+    if (!expandedExcludesRet) {
+        return LINGLONG_ERR(expandedExcludesRet);
+    }
+    auto &expandedExcludes = *expandedExcludesRet;
+
+    auto expandedIncludeRet = expandPaths(includeFiles);
+    if (!expandedIncludeRet) {
+        return LINGLONG_ERR(expandedIncludeRet);
+    }
+    const auto &expandedInclude = *expandedIncludeRet;
+
+    for (const auto &entry : expandedInclude) {
+        auto it = expandedExcludes.find(entry);
+        if (it != expandedExcludes.cend()) {
+            expandedExcludes.erase(it);
+        }
+    }
+
+    std::error_code ec;
+    auto iterator = std::filesystem::recursive_directory_iterator(filesDir.toStdString(), ec);
+    if (ec) {
+        return LINGLONG_ERR(QString::fromStdString(ec.message()));
+    }
+
+    std::unordered_set<std::string> allFiles;
+    for (const auto &file : iterator) {
+        allFiles.insert(file.path().string());
+    }
+
+    bool minified = !expandedExcludes.empty();
+    for (const auto &excludeFile : expandedExcludes) {
+        allFiles.erase(excludeFile);
+    }
+
+    return std::make_pair(minified, std::move(allFiles));
 }
 
 } // namespace linglong::package

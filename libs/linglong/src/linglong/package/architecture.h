@@ -4,12 +4,13 @@
  * SPDX-License-Identifier: LGPL-3.0-or-later
  */
 
-#ifndef LINGLONG_PACKAGE_ARCHITECTURE_H_
-#define LINGLONG_PACKAGE_ARCHITECTURE_H_
+#pragma once
 
 #include "linglong/utils/error/error.h"
 
 #include <QString>
+
+#include <string>
 
 namespace linglong::package {
 
@@ -21,10 +22,11 @@ public:
         X86_64,
         ARM64,
         LOONGARCH64,
+        LOONG64,
     };
 
     explicit Architecture(Value value = UNKNOW);
-    explicit Architecture(const QString &raw);
+    explicit Architecture(const std::string &raw);
 
     QString toString() const noexcept;
     QString getTriplet() const noexcept;
@@ -33,12 +35,13 @@ public:
 
     bool operator!=(const Architecture &that) const noexcept { return this->v != that.v; }
 
-    static utils::error::Result<Architecture> parse(const QString &raw) noexcept;
+    static utils::error::Result<Architecture> parse(const std::string &raw) noexcept;
+
+    static utils::error::Result<Architecture> currentCPUArchitecture() noexcept;
 
 private:
     Value v;
+    static std::string getInterpreter();
 };
 
 } // namespace linglong::package
-
-#endif

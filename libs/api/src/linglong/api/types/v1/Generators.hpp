@@ -22,6 +22,8 @@
 #include "linglong/api/types/v1/Version.hpp"
 #include "linglong/api/types/v1/Sections.hpp"
 #include "linglong/api/types/v1/UabLayer.hpp"
+#include "linglong/api/types/v1/RepositoryCache.hpp"
+#include "linglong/api/types/v1/RepositoryCacheLayersItem.hpp"
 #include "linglong/api/types/v1/RepoConfig.hpp"
 #include "linglong/api/types/v1/PackageManager1UpdateParameters.hpp"
 #include "linglong/api/types/v1/PackageManager1UninstallParameters.hpp"
@@ -134,6 +136,12 @@ void to_json(json & j, const PackageManager1UpdateParameters & x);
 
 void from_json(const json & j, RepoConfig & x);
 void to_json(json & j, const RepoConfig & x);
+
+void from_json(const json & j, RepositoryCacheLayersItem & x);
+void to_json(json & j, const RepositoryCacheLayersItem & x);
+
+void from_json(const json & j, RepositoryCache & x);
+void to_json(json & j, const RepositoryCache & x);
 
 void from_json(const json & j, UabLayer & x);
 void to_json(json & j, const UabLayer & x);
@@ -297,6 +305,9 @@ inline void from_json(const json & j, BuilderProject& x) {
 x.base = j.at("base").get<std::string>();
 x.build = j.at("build").get<std::string>();
 x.command = get_stack_optional<std::vector<std::string>>(j, "command");
+x.exclude = get_stack_optional<std::vector<std::string>>(j, "exclude");
+x.include = get_stack_optional<std::vector<std::string>>(j, "include");
+x.modules = get_stack_optional<std::map<std::string, std::vector<std::string>>>(j, "modules");
 x.package = j.at("package").get<BuilderProjectPackage>();
 x.permissions = get_stack_optional<ApplicationConfigurationPermissions>(j, "permissions");
 x.runtime = get_stack_optional<std::string>(j, "runtime");
@@ -311,6 +322,15 @@ j["base"] = x.base;
 j["build"] = x.build;
 if (x.command) {
 j["command"] = x.command;
+}
+if (x.exclude) {
+j["exclude"] = x.exclude;
+}
+if (x.include) {
+j["include"] = x.include;
+}
+if (x.modules) {
+j["modules"] = x.modules;
 }
 j["package"] = x.package;
 if (x.permissions) {
@@ -613,6 +633,32 @@ j["repos"] = x.repos;
 j["version"] = x.version;
 }
 
+inline void from_json(const json & j, RepositoryCacheLayersItem& x) {
+x.commit = j.at("commit").get<std::string>();
+x.info = j.at("info").get<PackageInfoV2>();
+}
+
+inline void to_json(json & j, const RepositoryCacheLayersItem & x) {
+j = json::object();
+j["commit"] = x.commit;
+j["info"] = x.info;
+}
+
+inline void from_json(const json & j, RepositoryCache& x) {
+x.config = j.at("config").get<RepoConfig>();
+x.layers = j.at("layers").get<std::map<std::string, RepositoryCacheLayersItem>>();
+x.llVersion = j.at("ll-version").get<std::string>();
+x.version = j.at("version").get<std::string>();
+}
+
+inline void to_json(json & j, const RepositoryCache & x) {
+j = json::object();
+j["config"] = x.config;
+j["layers"] = x.layers;
+j["ll-version"] = x.llVersion;
+j["version"] = x.version;
+}
+
 inline void from_json(const json & j, UabLayer& x) {
 x.info = j.at("info").get<PackageInfoV2>();
 x.minified = j.at("minified").get<bool>();
@@ -680,6 +726,7 @@ x.packageManager1UninstallResult = get_stack_optional<CommonResult>(j, "PackageM
 x.packageManager1UpdateParameters = get_stack_optional<PackageManager1UpdateParameters>(j, "PackageManager1UpdateParameters");
 x.packageManager1UpdateResult = get_stack_optional<PackageManager1ResultWithTaskID>(j, "PackageManager1UpdateResult");
 x.repoConfig = get_stack_optional<RepoConfig>(j, "RepoConfig");
+x.repositoryCache = get_stack_optional<RepositoryCache>(j, "RepositoryCache");
 x.uabMetaInfo = get_stack_optional<UabMetaInfo>(j, "UABMetaInfo");
 }
 
@@ -759,6 +806,9 @@ j["PackageManager1UpdateResult"] = x.packageManager1UpdateResult;
 }
 if (x.repoConfig) {
 j["RepoConfig"] = x.repoConfig;
+}
+if (x.repositoryCache) {
+j["RepositoryCache"] = x.repositoryCache;
 }
 if (x.uabMetaInfo) {
 j["UABMetaInfo"] = x.uabMetaInfo;
