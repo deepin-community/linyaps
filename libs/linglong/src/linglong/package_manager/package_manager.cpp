@@ -84,46 +84,32 @@ auto PackageManager::getConfiguration() const noexcept -> QVariantMap
     return utils::serialize::toQVariantMap(this->repo.getConfig());
 }
 
-auto PackageManager::UpdateConfiguration(uint16_t operation,
-                                         const QString &repoName,
-                                         const QString &url) noexcept -> QVariantMap
+void PackageManager::setConfiguration(const QVariantMap &parameters) noexcept
 {
-    LINGLONG_TRACE("update configuration")
-
-    utils::error::Result<void> ret;
-    if (repoName.isEmpty()) {
-        ret = LINGLONG_ERR("repoName is an empty string");
-        return toDBusReply(ret);
+    auto cfg = utils::serialize::fromQVariantMap<api::types::v1::RepoConfig>(parameters);
+    if (!cfg) {
+        sendErrorReply(QDBusError::InvalidArgs, cfg.error().message());
+        return;
     }
 
-    using Operation = linglong::api::dbus::v1::PackageManager::Operation;
-    if (operation >= static_cast<int>(Operation::Unknown)) {
-        ret = LINGLONG_ERR("repoName is an empty string");
-        return toDBusReply(ret);
+    const auto &cfgRef = *cfg;
+    const auto &curCfg = repo.getConfig();
+    if (cfgRef.version == curCfg.version && cfgRef.defaultRepo == curCfg.defaultRepo
+        && cfgRef.repos == curCfg.repos) {
+        return;
     }
 
-    switch (static_cast<Operation>(operation)) {
-    case api::dbus::v1::PackageManager::Operation::Add: {
-        ret = this->repo.addRemoteRepo(repoName, url);
-    } break;
-    case api::dbus::v1::PackageManager::Operation::Remove: {
-        ret = this->repo.removeRemoteRepo(repoName);
-    } break;
-    case api::dbus::v1::PackageManager::Operation::Update: {
-        ret = this->repo.updateRemoteRepo(repoName, url);
-    } break;
-    case api::dbus::v1::PackageManager::Operation::Use: {
-        ret = this->repo.setDefaultRemoteRepo(repoName);
-    } break;
-    case api::dbus::v1::PackageManager::Operation::Unknown:
-        break;
+    if (const auto &defaultRepo = cfg->defaultRepo;
+        cfg->repos.find(defaultRepo) == cfg->repos.end()) {
+        sendErrorReply(QDBusError::Failed,
+                       "default repository is missing after updating configuration.");
+        return;
     }
 
-    if (!ret) {
-        return toDBusReply(ret);
+    auto result = this->repo.setConfig(*cfg);
+    if (!result) {
+        sendErrorReply(QDBusError::Failed, result.error().message());
     }
-
-    return toDBusReply(0, "Set repository configuration success.");
 }
 
 QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd) noexcept

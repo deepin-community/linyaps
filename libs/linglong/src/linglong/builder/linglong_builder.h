@@ -4,8 +4,7 @@
  * SPDX-License-Identifier: LGPL-3.0-or-later
  */
 
-#ifndef LINGLONG_SRC_BUILDER_BUILDER_LINGLONG_BUILDER_H_
-#define LINGLONG_SRC_BUILDER_BUILDER_LINGLONG_BUILDER_H_
+#pragma once
 
 #include "linglong/api/types/v1/BuilderConfig.hpp"
 #include "linglong/api/types/v1/BuilderProject.hpp"
@@ -45,9 +44,9 @@ public:
     static auto extractLayer(const QString &layerPath,
                              const QString &destination) -> utils::error::Result<void>;
 
-    auto push(bool pushWithDevel = true,
-              const QString &repoUrl = "",
-              const QString &repoName = "") -> utils::error::Result<void>;
+    auto push(const std::string &module,
+              const std::string &repoUrl = "",
+              const std::string &repoName = "") -> utils::error::Result<void>;
 
     auto import() -> utils::error::Result<void>;
 
@@ -64,5 +63,3 @@ private:
 };
 
 } // namespace linglong::builder
-
-#endif // LINGLONG_SRC_BUILDER_BUILDER_LINGLONG_BUILDER_H_

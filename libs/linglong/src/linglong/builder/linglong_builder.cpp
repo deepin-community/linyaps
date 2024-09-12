@@ -992,9 +992,9 @@ utils::error::Result<void> Builder::extractLayer(const QString &layerPath,
     return LINGLONG_OK;
 }
 
-linglong::utils::error::Result<void> Builder::push(bool pushWithDevel,
-                                                   const QString &repoUrl,
-                                                   const QString &repoName)
+linglong::utils::error::Result<void> Builder::push(const std::string &module,
+                                                   const std::string &repoUrl,
+                                                   const std::string &repoName)
 {
     LINGLONG_TRACE("push reference to remote repository");
 
@@ -1003,94 +1003,11 @@ linglong::utils::error::Result<void> Builder::push(bool pushWithDevel,
         return LINGLONG_ERR(ref);
     }
 
-    using backUp = struct
-    {
-        QString oldVal;
-        QString newVal;
-    };
-
-    backUp defaultRepo;
-    backUp url;
-
-    auto cfg = this->repo.getConfig();
-    defaultRepo.oldVal = QString::fromStdString(cfg.defaultRepo);
-    url.oldVal = QString::fromStdString(cfg.repos.at(cfg.defaultRepo));
-    uint8_t flag{ 0 };
-
-    // name     url
-    //  0        0 no change
-    //  0        1 modify repo
-    //  1        0 set default
-    //  1        1 add repo
-    auto revokeRepoChange = utils::finally::finally([this, &defaultRepo, &url, &flag]() {
-        utils::error::Result<void> ret = LINGLONG_OK;
-
-        if (flag == 1) {
-            ret = this->repo.updateRemoteRepo(defaultRepo.oldVal, url.oldVal);
-        } else if (flag == 2 || flag == 3) {
-            ret = this->repo.setDefaultRemoteRepo(defaultRepo.oldVal);
-            if (!ret) {
-                qCritical() << ret.error().message();
-                return;
-            }
-
-            if (flag == 3) {
-                ret = this->repo.removeRemoteRepo(defaultRepo.newVal);
-            }
-        }
-
-        if (!ret) {
-            qCritical() << ret.error().message();
-            return;
-        }
-    });
-
-    if (!repoName.isEmpty()) {
-        auto it = cfg.repos.find(repoName.toStdString());
-        if (it == cfg.repos.cend()) {
-            defaultRepo.newVal = repoName;
-            flag <<= 1U;
-        }
-    }
-    if (!repoUrl.isEmpty()) {
-        auto urlStr = repoUrl.toStdString();
-        if (defaultRepo.newVal.isEmpty() && cfg.repos[cfg.defaultRepo] != urlStr) {
-            url.newVal = repoUrl;
-            flag <<= 1U;
-        }
+    if (repoName.empty() || repoUrl.empty()) {
+        return repo.push(*ref, module);
     }
 
-    utils::error::Result<void> result = LINGLONG_OK;
-    if (flag == 1) {
-        result = this->repo.updateRemoteRepo(defaultRepo.oldVal, url.newVal);
-    } else if (flag == 2) {
-        result = this->repo.setDefaultRemoteRepo(defaultRepo.newVal);
-    } else if (flag == 3) {
-        result = this->repo.addRemoteRepo(defaultRepo.newVal, url.newVal);
-        if (!result) {
-            return LINGLONG_ERR(result);
-        }
-        result = this->repo.setDefaultRemoteRepo(defaultRepo.newVal);
-    }
-
-    if (!result) {
-        return LINGLONG_ERR(result);
-    }
-
-    if (pushWithDevel) {
-        result = repo.push(*ref, "develop");
-
-        if (!result) {
-            return LINGLONG_ERR(result);
-        }
-    }
-
-    result = repo.push(*ref);
-    if (!result) {
-        return LINGLONG_ERR(result);
-    }
-
-    return LINGLONG_OK;
+    return repo.pushToRemote(repoName, repoUrl, *ref, module);
 }
 
 utils::error::Result<void> Builder::importLayer(const QString &path)

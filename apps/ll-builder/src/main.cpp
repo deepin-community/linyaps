@@ -10,7 +10,6 @@
 #include "linglong/package/version.h"
 #include "linglong/repo/client_factory.h"
 #include "linglong/repo/config.h"
-#include "linglong/utils/command/env.h"
 #include "linglong/utils/configure.h"
 #include "linglong/utils/error/error.h"
 #include "linglong/utils/global/initialize.h"
@@ -77,7 +76,7 @@ QStringList projectBuildConfigPaths()
     do {
         auto configPath =
           QStringList{ pwd.absolutePath(), ".ll-builder", "config.yaml" }.join(QDir::separator());
-        result << std::move(configPath);
+        result << configPath;
     } while (pwd.cdUp());
 
     return result;
@@ -121,7 +120,7 @@ void initDefaultBuildConfig()
 }
 
 linglong::utils::error::Result<linglong::api::types::v1::BuilderProject>
-parseProjectConfig(QString filename)
+parseProjectConfig(const QString &filename)
 {
     LINGLONG_TRACE(QString("parse project config %1").arg(filename));
     auto project =
@@ -212,7 +211,7 @@ int main(int argc, char **argv)
         }
 
         auto configFilePath = projectDir.absoluteFilePath("linglong.yaml");
-        auto templateFilePath = LINGLONG_DATA_DIR "/builder/templates/example.yaml";
+        const auto *templateFilePath = LINGLONG_DATA_DIR "/builder/templates/example.yaml";
 
         if (!QFileInfo::exists(templateFilePath)) {
             templateFilePath = ":/example.yaml";
@@ -231,7 +230,7 @@ int main(int argc, char **argv)
 
         auto rawData = templateFile.readAll();
         rawData.replace("@ID@", projectName.toUtf8());
-        if (!configFile.write(rawData)) {
+        if (configFile.write(rawData) == 0) {
             qDebug() << configFilePath << configFile.error();
             return -1;
         }
@@ -263,7 +262,7 @@ int main(int argc, char **argv)
                                     *repoCfg,
                                     clientFactory);
 
-    auto containerBuidler = new linglong::runtime::ContainerBuilder(**ociRuntime);
+    auto *containerBuidler = new linglong::runtime::ContainerBuilder(**ociRuntime);
     containerBuidler->setParent(QCoreApplication::instance());
 
     QMap<QString, std::function<int(QCommandLineParser & parser)>> subcommandMap = {
@@ -274,12 +273,12 @@ int main(int argc, char **argv)
               parser.addPositionalArgument("add", "add a remote repo");
               parser.addPositionalArgument("remove", "remove existing repo");
               parser.addPositionalArgument("update", "update url of existing repo");
-              parser.addPositionalArgument("use", "set default repo");
+              parser.addPositionalArgument("set-default", "set default repo");
               parser.addPositionalArgument("show", "show current config", "show\n");
               parser.setApplicationDescription("ll-builder repo add --name=NAME --url=URL\n"
                                                "ll-builder repo remove --name=NAME\n"
                                                "ll-builder repo update --name=NAME --url=NEWURL\n"
-                                               "ll-builder repo use --name=NAME\n"
+                                               "ll-builder repo set-default --name=NAME\n"
                                                "ll-builder repo show");
 
               auto name = QCommandLineOption("name", "name of remote repo", "name");
@@ -289,37 +288,31 @@ int main(int argc, char **argv)
 
               QStringList args = parser.positionalArguments();
               if (args.size() < 2) {
-                  std::cerr << "please specifying an operation" << std::endl;
+                  std::cerr << "please specifying an operation." << std::endl;
                   return EINVAL;
               }
 
-              linglong::utils::error::Result<void> ret;
+              if (!parser.isSet(name)) {
+                  std::cerr << "please specifying the repo name." << std::endl;
+                  return EINVAL;
+              }
+              std::string nameVal = parser.value(name).toStdString();
+
+              std::string urlVal;
+              if (parser.isSet(url)) {
+                  urlVal = parser.value(url).toStdString();
+                  if (urlVal.rfind("http", 0) != 0) {
+                      std::cerr << "url is invalid." << std::endl;
+                      return EINVAL;
+                  }
+
+                  if (urlVal.back() == '/') {
+                      urlVal.pop_back();
+                  }
+              }
+
               const auto &operation = args.at(1);
-              if (operation == "add") {
-                  if (!parser.isSet(name) || !parser.isSet(url)) {
-                      std::cerr << "please specifying the repo name and url" << std::endl;
-                      return EINVAL;
-                  }
-                  ret = repo.addRemoteRepo(parser.value(name), parser.value(url));
-              } else if (operation == "remove") {
-                  if (!parser.isSet(name)) {
-                      std::cerr << "please specifying the repo name" << std::endl;
-                      return EINVAL;
-                  }
-                  ret = repo.removeRemoteRepo(parser.value(name));
-              } else if (operation == "update") {
-                  if (!parser.isSet(name) || !parser.isSet(url)) {
-                      std::cerr << "please specifying the repo name and url" << std::endl;
-                      return EINVAL;
-                  }
-                  ret = repo.updateRemoteRepo(parser.value(name), parser.value(url));
-              } else if (operation == "use") {
-                  if (!parser.isSet(name)) {
-                      std::cerr << "please specifying the repo name" << std::endl;
-                      return EINVAL;
-                  }
-                  ret = repo.setDefaultRemoteRepo(parser.value(name));
-              } else if (operation == "show") {
+              if (operation == "show") {
                   const auto &cfg = repo.getConfig();
                   auto &output = std::cout;
                   output << "version: " << cfg.version << "\ndefaultRepo: " << cfg.defaultRepo
@@ -329,17 +322,83 @@ int main(int argc, char **argv)
                       const auto &[name, url] = pair;
                       output << name << '\t' << url << "\n";
                   });
-              } else {
-                  std::cerr << "unknown operation:" << operation.toStdString();
-                  return EINVAL;
               }
 
-              if (!ret) {
-                  std::cerr << ret.error().message().toStdString();
+              auto newCfg = repo.getConfig();
+              if (operation == "add") {
+                  if (urlVal.empty()) {
+                      std::cerr << "url is empty." << std::endl;
+                      return EINVAL;
+                  }
+
+                  auto node = newCfg.repos.try_emplace(nameVal, urlVal);
+                  if (!node.second) {
+                      std::cerr << "repo " + nameVal + " already exist." << std::endl;
+                      return -1;
+                  }
+
+                  auto ret = repo.setConfig(newCfg);
+                  if (!ret) {
+                      std::cerr << ret.error().message().toStdString() << std::endl;
+                      return -1;
+                  }
+
+                  return 0;
+              }
+
+              auto existingRepo = newCfg.repos.find(nameVal);
+              if (existingRepo == newCfg.repos.cend()) {
+                  std::cerr << "the operated repo " + nameVal + "doesn't exist." << std::endl;
                   return -1;
               }
 
-              return 0;
+              if (operation == "remove") {
+                  if (newCfg.defaultRepo == nameVal) {
+                      std::cerr << "repo " + nameVal
+                          + "is default repo, please change default repo before removing it.";
+                      return -1;
+                  }
+
+                  newCfg.repos.erase(existingRepo);
+                  auto ret = repo.setConfig(newCfg);
+                  if (!ret) {
+                      std::cerr << ret.error().message().toStdString() << std::endl;
+                      return -1;
+                  }
+
+                  return 0;
+              }
+
+              if (operation == "update") {
+                  if (urlVal.empty()) {
+                      std::cerr << "url is empty." << std::endl;
+                      return -1;
+                  }
+
+                  existingRepo->second = urlVal;
+                  auto ret = repo.setConfig(newCfg);
+                  if (!ret) {
+                      std::cerr << ret.error().message().toStdString() << std::endl;
+                      return -1;
+                  }
+
+                  return 0;
+              }
+
+              if (operation == "set-default") {
+                  if (newCfg.defaultRepo != nameVal) {
+                      newCfg.defaultRepo = nameVal;
+                      auto ret = repo.setConfig(newCfg);
+                      if (!ret) {
+                          std::cerr << ret.error().message().toStdString() << std::endl;
+                          return -1;
+                      }
+                  }
+                  return 0;
+              }
+
+              std::cerr << "unknown operation:" << operation.toStdString() << std::endl;
+              return EINVAL;
           } },
         { "build",
           [&](QCommandLineParser &parser) -> int {
@@ -584,7 +643,7 @@ int main(int argc, char **argv)
                                                  repo,
                                                  *containerBuidler,
                                                  *builderCfg);
-              auto result = builder.extractLayer(layerPath, destination);
+              auto result = linglong::builder::Builder::extractLayer(layerPath, destination);
               if (!result) {
                   qCritical() << result.error();
                   return -1;
@@ -660,7 +719,6 @@ int main(int argc, char **argv)
               auto repoName = parser.value(optRepoName);
               auto repoChannel = parser.value(optRepoChannel);
 
-              bool pushWithDevel = parser.isSet(optNoDevel) ? false : true;
               auto project = parseProjectConfig(QDir().absoluteFilePath(parser.value(yamlFile)));
               if (!project) {
                   qCritical() << project.error();
@@ -672,11 +730,20 @@ int main(int argc, char **argv)
                                                  repo,
                                                  *containerBuidler,
                                                  *builderCfg);
-              auto result = builder.push(pushWithDevel, repoUrl, repoName);
+              auto result = builder.push("binary", repoUrl.toStdString(), repoName.toStdString());
               if (!result) {
                   qCritical() << result.error();
                   return -1;
               }
+
+              if (!parser.isSet(optNoDevel)) {
+                  result = builder.push("develop", repoUrl.toStdString(), repoName.toStdString());
+                  if (!result) {
+                      qCritical() << result.error();
+                      return -1;
+                  }
+              }
+
               return 0;
           } },
     };
@@ -684,7 +751,8 @@ int main(int argc, char **argv)
     if (subcommandMap.contains(command)) {
         auto subcommand = subcommandMap[command];
         return subcommand(parser);
-    } else {
-        parser.showHelp();
     }
+
+    parser.showHelp();
+    return 0;
 }

@@ -54,7 +54,7 @@ Usage:
     ll-cli [--json] repo add NAME URL
     ll-cli [--json] repo remove NAME
     ll-cli [--json] repo update NAME URL
-    ll-cli [--json] repo use NAME
+    ll-cli [--json] repo set-default NAME
     ll-cli [--json] repo show
     ll-cli [--json] info TIER
     ll-cli [--json] content APP
@@ -878,94 +878,107 @@ int Cli::repo(std::map<std::string, docopt::value> &args)
     }
     auto &cfgRef = *cfg;
 
-    if (args.empty() || args["show"].asBool()) {
+    auto op = args.find("show");
+    if (args.empty() || op != args.cend()) {
         this->printer.printRepoConfig(*cfg);
         return 0;
     }
 
-    if (args["modify"].asBool()) {
+    op = args.find("modify");
+    if (op != args.cend()) {
         this->printer.printErr(
           LINGLONG_ERRV("sub-command 'modify' already has been deprecated, please use sub-command "
                         "'add' to add a remote repository and use it as default."));
         return EINVAL;
     }
 
-    QString url;
-    QString name;
-    if (args["NAME"].isString()) {
-        name = QString::fromStdString(args["NAME"].asString());
+    auto it = args.find("NAME");
+    std::string name;
+    if (it == args.cend() || !it->second.isString()) {
+        this->printer.printErr(LINGLONG_ERRV("repo name must be specified as string"));
+        return EINVAL;
     }
+    name = it->second.asString();
 
-    if (args["URL"].isString()) {
-        url = QString::fromStdString(args["URL"].asString());
-        // remove last slash
-        if (url.back() == '/') {
-            url.chop(1);
-        }
-
+    it = args.find("URL");
+    std::string url;
+    if (it != args.cend() && it->second.isString()) {
         // TODO: verify more complexly
-        if (!url.startsWith("http")) {
+        if (url.rfind("http", 0) != 0) {
             this->printer.printErr(LINGLONG_ERRV("url is invalid"));
-            return -1;
+            return EINVAL;
+        }
+
+        // remove last slash
+        url = it->second.asString();
+        if (url.back() == '/') {
+            url.pop_back();
         }
     }
 
-    using operation = api::dbus::v1::PackageManager::Operation;
-    operation type = operation::Unknown;
-    auto it = cfgRef.repos.find(name.toStdString());
-    if (args["add"].asBool()) {
-        if (it != cfgRef.repos.cend()) {
-            this->printer.printErr(LINGLONG_ERRV("add error: repo " + name + " already exist"));
+    op = args.find("add");
+    if (op != args.cend()) {
+        if (url.empty()) {
+            this->printer.printErr(LINGLONG_ERRV("url is empty."));
+            return EINVAL;
+        }
+
+        auto ret = cfgRef.repos.try_emplace(name, url);
+        if (!ret.second) {
+            this->printer.printErr(
+              LINGLONG_ERRV(QString{ "repo " } + name.c_str() + " already exist."));
             return -1;
         }
-        type = operation::Add;
-    } else if (args["remove"].asBool()) {
-        if (it == cfgRef.repos.cend()) {
-            this->printer.printErr(LINGLONG_ERRV("remove error: repo " + name + " doesn't exist"));
-            return -1;
-        }
-        type = operation::Remove;
-    } else if (args["update"].asBool()) {
-        if (it == cfgRef.repos.cend()) {
-            this->printer.printErr(LINGLONG_ERRV("modify error: repo " + name + " doesn't exist"));
-            return -1;
-        }
-        type = operation::Update;
-    } else if (args["use"].asBool()) {
-        if (it == cfgRef.repos.cend()) {
-            this->printer.printErr(LINGLONG_ERRV("modify error: repo " + name + " doesn't exist"));
-            return -1;
-        }
-        type = operation::Use;
+
+        this->pkgMan.setConfiguration(utils::serialize::toQVariantMap(cfgRef));
+        return 0;
     }
 
-    if (type == operation::Unknown) {
-        this->printer.printErr(LINGLONG_ERRV("unsupported operation"));
+    auto existingRepo = cfgRef.repos.find(name);
+    if (existingRepo == cfgRef.repos.cend()) {
+        this->printer.printErr(
+          LINGLONG_ERRV(QString{ "the operated repo " } + name.c_str() + "doesn't exist"));
         return -1;
     }
 
-    auto reply = this->pkgMan.UpdateConfiguration(static_cast<uint16_t>(type), name, url);
-    reply.waitForFinished();
+    op = args.find("remove");
+    if (op != args.cend()) {
+        if (cfgRef.defaultRepo == name) {
+            this->printer.printErr(
+              LINGLONG_ERRV(QString{ "repo " } + name.c_str()
+                            + "is default repo, please change default repo before removing it."));
+            return -1;
+        }
 
-    if (reply.isError()) {
-        qCritical() << reply.error().message();
-        return -1;
+        cfgRef.repos.erase(existingRepo);
+        this->pkgMan.setConfiguration(utils::serialize::toQVariantMap(cfgRef));
+        return 0;
     }
 
-    auto result =
-      utils::serialize::fromQVariantMap<api::types::v1::PackageManager1ResultWithTaskID>(
-        reply.value());
-    if (!result) {
-        qCritical() << "bug detected.";
-        std::abort();
+    op = args.find("update");
+    if (op != args.cend()) {
+        if (url.empty()) {
+            this->printer.printErr(LINGLONG_ERRV("url is empty."));
+            return -1;
+        }
+
+        existingRepo->second = url;
+        this->pkgMan.setConfiguration(utils::serialize::toQVariantMap(cfgRef));
+        return 0;
     }
 
-    if (result->code != 0) {
-        this->printer.printReply({ .code = result->code, .message = result->message });
-        return -1;
+    op = args.find("set-default");
+    if (op != args.end()) {
+        if (cfgRef.defaultRepo != name) {
+            cfgRef.defaultRepo = name;
+            this->pkgMan.setConfiguration(utils::serialize::toQVariantMap(cfgRef));
+        }
+
+        return 0;
     }
 
-    return 0;
+    this->printer.printErr(LINGLONG_ERRV("unknown operation"));
+    return -1;
 }
 
 int Cli::info(std::map<std::string, docopt::value> &args)

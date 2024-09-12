@@ -4,8 +4,7 @@
  * SPDX-License-Identifier: LGPL-3.0-or-later
  */
 
-#ifndef LINGLONG_SRC_MODULE_REPO_OSTREE_REPO_H_
-#define LINGLONG_SRC_MODULE_REPO_OSTREE_REPO_H_
+#pragma once
 
 #include "linglong/api/types/v1/RepoConfig.hpp"
 #include "linglong/package/fuzzy_reference.h"
@@ -48,11 +47,7 @@ public:
     ~OSTreeRepo() override;
 
     [[nodiscard]] const api::types::v1::RepoConfig &getConfig() const noexcept;
-    utils::error::Result<void> setDefaultRemoteRepo(const QString &repoName) noexcept;
-    utils::error::Result<void> removeRemoteRepo(const QString &repoName) noexcept;
-    utils::error::Result<void> addRemoteRepo(const QString &repoName, const QString &url) noexcept;
-    utils::error::Result<void> updateRemoteRepo(const QString &repoName,
-                                                const QString &url) noexcept;
+    utils::error::Result<void> setConfig(const api::types::v1::RepoConfig &cfg) noexcept;
 
     utils::error::Result<package::LayerDir>
     importLayerDir(const package::LayerDir &dir,
@@ -64,6 +59,12 @@ public:
                 const std::optional<std::string> &subRef = std::nullopt) const noexcept;
     [[nodiscard]] utils::error::Result<void>
     push(const package::Reference &reference, const std::string &module = "binary") const noexcept;
+
+    [[nodiscard]] utils::error::Result<void>
+    pushToRemote(const std::string &remoteRepo,
+                 const std::string &url,
+                 const package::Reference &reference,
+                 const std::string &module = "binary") const noexcept;
 
     void pull(service::InstallTask &taskContext,
               const package::Reference &reference,
@@ -125,5 +126,3 @@ private:
 };
 
 } // namespace linglong::repo
-
-#endif // LINGLONG_SRC_MODULE_REPO_OSTREE_REPO_H_

@@ -22,7 +22,7 @@ class PackageManager : public QObject, protected QDBusContext
 {
     Q_OBJECT
     Q_CLASSINFO("D-Bus Interface", "org.deepin.linglong.PackageManager1")
-    Q_PROPERTY(QVariantMap Configuration READ getConfiguration)
+    Q_PROPERTY(QVariantMap Configuration READ getConfiguration WRITE setConfiguration)
 
 public:
     PackageManager(linglong::repo::OSTreeRepo &repo, QObject *parent);
@@ -41,10 +41,8 @@ public:
                 const std::string &module) noexcept;
 
 public
-    Q_SLOT : auto getConfiguration() const noexcept -> QVariantMap;
-    auto UpdateConfiguration(uint16_t operation,
-                             const QString &repoName,
-                             const QString &url) noexcept -> QVariantMap;
+    Q_SLOT : [[nodiscard]] auto getConfiguration() const noexcept -> QVariantMap;
+    void setConfiguration(const QVariantMap &parameters) noexcept;
     auto Install(const QVariantMap &parameters) noexcept -> QVariantMap;
     auto InstallFromFile(const QDBusUnixFileDescriptor &fd,
                          const QString &fileType) noexcept -> QVariantMap;
