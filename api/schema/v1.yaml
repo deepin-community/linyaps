@@ -622,7 +622,6 @@ $defs:
       config:
         $ref: '#/$defs/RepoConfig'
       layers:
-        title: RepositoryCacheLayers
         type: array
         items:
           type: object
