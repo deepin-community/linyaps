@@ -1,3 +1,12 @@
+linglong (1.6.2-1) unstable; urgency=medium
+
+  * fix: improve `ll-cli ps` output
+  * fix(ll-cli): nothing changed if repo modify without '--name'
+  * fix(ll-builder): failed to generate desktop file
+  * chore!: remove linglong-upgrade
+
+ -- dengbo <dengbo@deepin.org>  Thu, 12 Sep 2024 13:37:44 +0800
+
 linglong (1.6.1-1) unstable; urgency=medium
 
   * chore: adjust XDG_DATA_DIRS environment
