@@ -6,14 +6,10 @@ ARCH=$(shell dpkg-architecture -qDEB_TARGET_MULTIARCH)
 VERSION=$(shell awk '/VERSION=/' /etc/os-release | sed 's/VERSION=//' | sed 's/\"//g' | sed 's/[.]0/./')
 ENABLE_UAB_SUPPORT=FALSE
 
-ifeq ($(OS) $(OS_VERSION), deepin 23)
-ENABLE_UAB_SUPPORT=TRUE
-ENABLE_STATIC_BOX=TRUE
-endif
-
-ifeq ($(OS), uos)
-ENABLE_UAB_SUPPORT=TRUE
-ENABLE_STATIC_BOX=TRUE
+ifeq ($(OS) $(VERSION), deepin 23)
+	ENABLE_UAB_SUPPORT=TRUE
+else ifeq ($(OS) $(VERSION), uos 20)
+	ENABLE_UAB_SUPPORT=TRUE
 endif
 
 %:
