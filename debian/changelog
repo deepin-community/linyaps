@@ -1,3 +1,12 @@
+linglong (1.6.3-1) unstable; urgency=medium
+
+  * feat: support propagation bind
+  * fix: failed to run linglong.sh
+  * fix: change the mount options of rootfs
+  * fix: using queues to control install order
+
+ -- dengbo <dengbo@deepin.org>  Tue, 15 Oct 2024 15:39:38 +0800
+
 linglong (1.6.2-1) unstable; urgency=medium
 
   * fix: improve `ll-cli ps` output
