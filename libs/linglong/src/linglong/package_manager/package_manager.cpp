@@ -6,13 +6,16 @@
 
 #include "package_manager.h"
 
+#include "linglong/adaptors/migrate/migrate1.h"
 #include "linglong/api/types/v1/Generators.hpp"
 #include "linglong/api/types/v1/PackageManager1JobInfo.hpp"
 #include "linglong/package/layer_file.h"
 #include "linglong/package/layer_packager.h"
 #include "linglong/package/uab_file.h"
+#include "linglong/package_manager/migrate.h"
 #include "linglong/package_manager/task.h"
 #include "linglong/utils/command/env.h"
+#include "linglong/utils/dbus/register.h"
 #include "linglong/utils/finally/finally.h"
 #include "linglong/utils/packageinfo_handler.h"
 #include "linglong/utils/serialize/json.h"
@@ -25,7 +28,6 @@
 #include <QEventLoop>
 #include <QJsonArray>
 #include <QMetaObject>
-#include <QSettings>
 #include <QUuid>
 
 #include <algorithm>
@@ -127,19 +129,32 @@ auto PackageManager::getConfiguration() const noexcept -> QVariantMap
     return utils::serialize::toQVariantMap(this->repo.getConfig());
 }
 
-auto PackageManager::setConfiguration(const QVariantMap &parameters) noexcept -> QVariantMap
+void PackageManager::setConfiguration(const QVariantMap &parameters) noexcept
 {
     auto cfg = utils::serialize::fromQVariantMap<api::types::v1::RepoConfig>(parameters);
     if (!cfg) {
-        return toDBusReply(cfg);
+        sendErrorReply(QDBusError::InvalidArgs, cfg.error().message());
+        return;
+    }
+
+    const auto &cfgRef = *cfg;
+    const auto &curCfg = repo.getConfig();
+    if (cfgRef.version == curCfg.version && cfgRef.defaultRepo == curCfg.defaultRepo
+        && cfgRef.repos == curCfg.repos) {
+        return;
+    }
+
+    if (const auto &defaultRepo = cfg->defaultRepo;
+        cfg->repos.find(defaultRepo) == cfg->repos.end()) {
+        sendErrorReply(QDBusError::Failed,
+                       "default repository is missing after updating configuration.");
+        return;
     }
 
     auto result = this->repo.setConfig(*cfg);
     if (!result) {
-        return toDBusReply(result);
+        sendErrorReply(QDBusError::Failed, result.error().message());
     }
-
-    return toDBusReply(0, "Set repository configuration success.");
 }
 
 QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd) noexcept
@@ -179,10 +194,8 @@ QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd) 
                                          {
                                            .fallbackToRemote = false // NOLINT
                                          });
-    auto isDevelop = packageInfo.packageInfoV2Module == "develop";
-
     if (ref) {
-        auto layerDir = this->repo.getLayerDir(*ref, isDevelop);
+        auto layerDir = this->repo.getLayerDir(*ref, packageInfo.packageInfoV2Module);
         if (layerDir && layerDir->valid()) {
             return toDBusReply(-1, ref->toString() + " is already installed");
         }
@@ -218,7 +231,15 @@ QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd) 
        &taskRef,
        packageRef = std::move(packageRefRet).value(),
        layerFile = *layerFileRet,
-       isDevelop]() {
+       module = packageInfo.packageInfoV2Module]() {
+          auto removeTask = utils::finally::finally([&taskRef, this] {
+              auto elem = std::find(this->taskList.begin(), this->taskList.end(), taskRef);
+              if (elem == this->taskList.end()) {
+                  qCritical() << "the status of package manager is invalid";
+                  return;
+              }
+              this->taskList.erase(elem);
+          });
           taskRef.updateStatus(InstallTask::preInstall, "prepare for installing layer");
 
           package::LayerPackager layerPackager;
@@ -244,8 +265,7 @@ QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd) 
               return;
           }
 
-          pullDependency(taskRef, *info, isDevelop);
-
+          pullDependency(taskRef, *info, module);
           if (taskRef.currentStatus() == InstallTask::Failed
               || taskRef.currentStatus() == InstallTask::Canceled) {
               return;
@@ -258,6 +278,11 @@ QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd) 
           }
 
           this->repo.exportReference(packageRef);
+
+          auto mergeRet = this->repo.mergeModules();
+          if (!mergeRet.has_value()) {
+              qCritical() << "merge modules failed: " << mergeRet.error().message();
+          }
           taskRef.updateStatus(InstallTask::Success, "install layer successfully");
       };
     taskRef.setJob(std::move(installer));
@@ -267,59 +292,6 @@ QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd) 
       .code = 0,
       .message = (realFile + " is now installing").toStdString(),
     });
-}
-
-utils::error::Result<api::types::v1::MinifiedInfo> PackageManager::updateMinifiedInfo(
-  const QFileInfo &file, const QString &appRef, const QString &uuid) noexcept
-{
-    LINGLONG_TRACE("update minified file: " + file.absoluteFilePath())
-
-    auto ret =
-      utils::serialize::LoadJSONFile<api::types::v1::MinifiedInfo>(file.absoluteFilePath());
-    if (!ret) {
-        return LINGLONG_ERR(ret);
-    }
-
-    const auto &originalInfo = *ret;
-    auto newInfo = originalInfo;
-
-    auto it = std::find_if(newInfo.infos.begin(),
-                           newInfo.infos.end(),
-                           [appRef = appRef.toStdString()](const api::types::v1::Info &info) {
-                               return appRef == info.appRef;
-                           });
-
-    // update existing info
-    if (it != newInfo.infos.cend()) {
-        it->uuid = uuid.toStdString();
-    } else {
-        newInfo.infos.push_back({ appRef.toStdString(), uuid.toStdString() });
-    }
-
-    auto tmpName = file.absoluteDir().absoluteFilePath(file.fileName() + "~");
-    QFile tmpFile{ tmpName };
-    if (!tmpFile.open(QIODevice::Text | QIODevice::Truncate | QIODevice::WriteOnly)) {
-        return LINGLONG_ERR(tmpFile);
-    }
-
-    QTextStream ofs{ &tmpFile };
-    ofs << QString::fromStdString(nlohmann::json(newInfo).dump());
-    ofs.flush();
-
-    if (ofs.status() == QTextStream::WriteFailed) {
-        return LINGLONG_ERR("failed to write " % tmpName);
-    }
-
-    if (!QFile::remove(file.absoluteFilePath())) {
-        return LINGLONG_ERR("couldn't remove file " % file.absoluteFilePath());
-    }
-
-    if (!tmpFile.rename(file.absoluteFilePath())) {
-        return LINGLONG_ERR("couldn't rename " % tmpName % "to" % file.absoluteFilePath() % ":"
-                            % tmpFile.errorString());
-    }
-
-    return originalInfo;
 }
 
 QVariantMap PackageManager::installFromUAB(const QDBusUnixFileDescriptor &fd) noexcept
@@ -455,9 +427,9 @@ QVariantMap PackageManager::installFromUAB(const QDBusUnixFileDescriptor &fd) no
               }
 
               const auto &layerDir = package::LayerDir{ layerDirPath.absolutePath() };
-              QString subRef;
+              std::optional<std::string> subRef{ std::nullopt };
               if (layer.minified) {
-                  subRef = "minified/" + QString::fromStdString(metaInfo.get().uuid);
+                  subRef = metaInfo.get().uuid;
               }
 
               auto infoRet = layerDir.info();
@@ -476,7 +448,7 @@ QVariantMap PackageManager::installFromUAB(const QDBusUnixFileDescriptor &fd) no
 
               bool isAppLayer = layer.info.kind == "app";
               if (isAppLayer) { // it's meaningless for app layer that declare minified is true
-                  subRef.clear();
+                  subRef = std::nullopt;
               }
 
               auto ret = this->repo.importLayerDir(layerDir, subRef);
@@ -491,68 +463,20 @@ QVariantMap PackageManager::installFromUAB(const QDBusUnixFileDescriptor &fd) no
 
               transaction.addRollBack(
                 [this, layerInfo = std::move(info), layerRef = ref, subRef]() noexcept {
-                    auto ret = this->repo.remove(layerRef,
-                                                 layerInfo.packageInfoV2Module == "develop",
-                                                 subRef);
+                    auto ret = this->repo.remove(layerRef, layerInfo.packageInfoV2Module, subRef);
                     if (!ret) {
                         qCritical() << "rollback importLayerDir failed:" << ret.error().message();
                     }
                 });
-
-              if (isAppLayer) {
-                  appLayerDir = *ret;
-              }
-
-              if (!subRef.isEmpty()) {
-                  QFile tagFile =
-                    appLayerDir.absoluteFilePath(QString{ ".minified-%1" }.arg(ref.id));
-                  if (!tagFile.open(QIODevice::NewOnly | QIODevice::WriteOnly)) {
-                      taskRef.updateStatus(InstallTask::Failed, tagFile.errorString());
-                      return;
-                  }
-
-                  const auto &completedLayer = this->repo.getLayerDir(ref);
-                  if (!completedLayer) {
-                      taskRef.reportError(std::move(ret).error());
-                      return;
-                  }
-
-                  const auto &minifiedPath = completedLayer->absoluteFilePath("minified.json");
-                  if (!QFileInfo::exists(minifiedPath)) {
-                      continue;
-                  }
-
-                  auto ret = linglong::service::PackageManager::updateMinifiedInfo(
-                    minifiedPath,
-                    appRef.toString(),
-                    QString::fromStdString(metaInfo.get().uuid));
-                  if (!ret) {
-                      taskRef.reportError(std::move(ret).error());
-                      return;
-                  }
-
-                  transaction.addRollBack([minifiedPath, originalInfo = *ret]() noexcept {
-                      QFile minifiedFile{ minifiedPath };
-                      if (!minifiedFile.open(QIODevice::WriteOnly | QIODevice::Truncate
-                                             | QIODevice::Text)) {
-                          qCritical() << minifiedFile.errorString();
-                          return;
-                      }
-
-                      QTextStream ofs{ &minifiedFile };
-                      ofs << QString::fromStdString(nlohmann::json(originalInfo).dump());
-                      ofs.flush();
-
-                      if (ofs.status() == QTextStream::WriteFailed) {
-                          qCritical() << "couldn't rollback to the original minified.json";
-                      }
-                  });
-              }
           }
 
           transaction.commit();
           this->repo.exportReference(appRef);
 
+          auto mergeRet = this->repo.mergeModules();
+          if (!mergeRet.has_value()) {
+              qCritical() << "merge modules failed: " << mergeRet.error().message();
+          }
           taskRef.updateStatus(InstallTask::Success, "install uab successfully");
       };
 
@@ -594,29 +518,39 @@ auto PackageManager::Install(const QVariantMap &parameters) noexcept -> QVariant
     if (!fuzzyRef) {
         return toDBusReply(fuzzyRef);
     }
-
-    auto ref = this->repo.clearReference(*fuzzyRef,
-                                         {
-                                           .fallbackToRemote = false // NOLINT
-                                         });
-    auto curModule = paras->package.packageManager1PackageModule.value_or("runtime");
-    auto isDevelop = curModule == "develop";
-
-    if (ref) {
-        auto layerDir = this->repo.getLayerDir(*ref, isDevelop);
+    // 判断应用是否已存在
+    auto localRef = this->repo.clearReference(*fuzzyRef,
+                                              {
+                                                .fallbackToRemote = false // NOLINT
+                                              });
+    auto curModule = paras->package.packageManager1PackageModule.value_or("binary");
+    if (localRef) {
+        auto layerDir = this->repo.getLayerDir(*localRef, curModule);
         if (layerDir && layerDir->valid()) {
-            return toDBusReply(-1, ref->toString() + " is already installed");
+            return toDBusReply(-1, localRef->toString() + " is already installed");
+        }
+        // 如果要安装module，并且没有指定版本，应该使用已安装的binary的版本
+        if (curModule != "binary" && !fuzzyRef->version.has_value()) {
+            fuzzyRef->version = localRef->version;
         }
     }
-
-    ref = this->repo.clearReference(*fuzzyRef,
-                                    {
-                                      .forceRemote = true // NOLINT
-                                    });
+    // 查询远程应用
+    auto ref = this->repo.clearReference(*fuzzyRef,
+                                         {
+                                           .forceRemote = true // NOLINT
+                                         },
+                                         curModule);
     if (!ref) {
         return toDBusReply(ref);
     }
     auto reference = *ref;
+    // 安装模块之前要先安装binary
+    if (curModule != "binary") {
+        auto layerDir = this->repo.getLayerDir(reference, "binary");
+        if (!layerDir.has_value() || !layerDir->valid()) {
+            return toDBusReply(-1, "to install the module, one must first install the binary");
+        }
+    }
 
     InstallTask task{ reference, curModule };
     if (std::find(this->taskList.cbegin(), this->taskList.cend(), task) != this->taskList.cend()) {
@@ -629,8 +563,9 @@ auto PackageManager::Install(const QVariantMap &parameters) noexcept -> QVariant
     auto &taskRef = this->taskList.emplace_back(std::move(task));
     connect(&taskRef, &InstallTask::TaskChanged, this, &PackageManager::TaskChanged);
 
-    taskRef.setJob([this, &taskRef, reference, isDevelop]() {
-        this->installRef(taskRef, reference, isDevelop);
+    taskRef.setJob([this, &taskRef, reference, curModule]() {
+        this->InstallRef(taskRef, reference, curModule);
+        taskRef.updateStatus(InstallTask::Success, "Install " + reference.toString() + " success");
     });
     // notify task list change
     Q_EMIT TaskListChanged(taskRef.taskID());
@@ -642,9 +577,9 @@ auto PackageManager::Install(const QVariantMap &parameters) noexcept -> QVariant
     });
 }
 
-void PackageManager::installRef(InstallTask &taskContext,
+void PackageManager::InstallRef(InstallTask &taskContext,
                                 const package::Reference &ref,
-                                bool develop) noexcept
+                                const std::string &module) noexcept
 {
     LINGLONG_TRACE("install " + ref.toString());
 
@@ -661,13 +596,13 @@ void PackageManager::installRef(InstallTask &taskContext,
 
     utils::Transaction t;
 
-    this->repo.pull(taskContext, ref, develop);
+    this->repo.pull(taskContext, ref, module);
     if (taskContext.currentStatus() == InstallTask::Failed
         || taskContext.currentStatus() == InstallTask::Canceled) {
         return;
     }
-    t.addRollBack([this, &ref, develop]() noexcept {
-        auto result = this->repo.remove(ref, develop);
+    t.addRollBack([this, &ref, &module]() noexcept {
+        auto result = this->repo.remove(ref, module);
         if (!result) {
             qCritical() << result.error();
             Q_ASSERT(false);
@@ -686,7 +621,10 @@ void PackageManager::installRef(InstallTask &taskContext,
         return;
     }
 
-    pullDependency(taskContext, *info, develop);
+    // for 'kind: app', check runtime and foundation
+    if (info->kind == "app") {
+        pullDependency(taskContext, *info, "binary");
+    }
 
     // check the status of pull runtime and foundation
     if (taskContext.currentStatus() == InstallTask::Failed
@@ -696,7 +634,10 @@ void PackageManager::installRef(InstallTask &taskContext,
 
     this->repo.exportReference(ref);
 
-    taskContext.updateStatus(InstallTask::Success, "Install " + ref.toString() + " success");
+    auto mergeRet = this->repo.mergeModules();
+    if (!mergeRet.has_value()) {
+        qCritical() << "merge modules failed: " << mergeRet.error().message();
+    }
     t.commit();
 }
 
@@ -722,15 +663,31 @@ auto PackageManager::Uninstall(const QVariantMap &parameters) noexcept -> QVaria
         return toDBusReply(-1, fuzzyRef->toString() + " not installed.");
     }
 
-    auto develop = paras->package.packageManager1PackageModule.value_or("runtime") == "develop";
-
+    auto module = paras->package.packageManager1PackageModule.value_or("binary");
     this->repo.unexportReference(*ref);
-
-    auto result = this->repo.remove(*ref, develop);
+    auto result = this->repo.remove(*ref, module);
     if (!result) {
         return toDBusReply(result);
     }
-
+    // 卸载binary会同时卸载所有模块
+    if (module == "binary") {
+        auto modules = this->repo.getModuleList(*ref);
+        for (const auto &mod : modules) {
+            auto result = this->repo.remove(*ref, mod);
+            if (!result) {
+                return toDBusReply(result);
+            }
+        }
+    } else {
+        auto result = this->repo.remove(*ref, module);
+        if (!result) {
+            return toDBusReply(result);
+        }
+    }
+    auto mergeRet = this->repo.mergeModules();
+    if (!mergeRet.has_value()) {
+        qCritical() << "merge modules failed: " << mergeRet.error().message();
+    }
     return toDBusReply(0, "Uninstall " + ref->toString() + " success.");
 }
 
@@ -777,9 +734,7 @@ auto PackageManager::Update(const QVariantMap &parameters) noexcept -> QVariantM
     qInfo() << "Before upgrade, old Ref: " << reference.toString()
             << " new Ref: " << newReference.toString();
 
-    auto curModule = paras->package.packageManager1PackageModule.value_or("runtime");
-    auto isDevelop = curModule == "develop";
-
+    auto curModule = paras->package.packageManager1PackageModule.value_or("binary");
     InstallTask task{ newReference, curModule };
     if (std::find(this->taskList.cbegin(), this->taskList.cend(), task) != this->taskList.cend()) {
         return toDBusReply(-1,
@@ -789,10 +744,11 @@ auto PackageManager::Update(const QVariantMap &parameters) noexcept -> QVariantM
 
     auto &taskRef = this->taskList.emplace_back(std::move(task));
     connect(&taskRef, &InstallTask::TaskChanged, this, &PackageManager::TaskChanged);
-    taskRef.setJob([this, &taskRef, reference, newReference, isDevelop]() {
-        this->Update(taskRef, reference, newReference, isDevelop);
+    taskRef.setJob([this, &taskRef, reference, newReference, curModule]() {
+        this->Update(taskRef, reference, newReference);
     });
     Q_EMIT TaskListChanged(taskRef.taskID());
+
     return utils::serialize::toQVariantMap(api::types::v1::PackageManager1ResultWithTaskID{
       .taskID = taskRef.taskID().toStdString(),
       .code = 0,
@@ -802,38 +758,52 @@ auto PackageManager::Update(const QVariantMap &parameters) noexcept -> QVariantM
 
 void PackageManager::Update(InstallTask &taskContext,
                             const package::Reference &ref,
-                            const package::Reference &newRef,
-                            bool develop) noexcept
+                            const package::Reference &newRef) noexcept
 {
     LINGLONG_TRACE("update " + ref.toString());
-
+    auto modules = this->repo.getModuleList(ref);
     utils::Transaction t;
-
-    this->installRef(taskContext, newRef, develop);
-    if (taskContext.currentStatus() == InstallTask::Failed
-        || taskContext.currentStatus() == InstallTask::Canceled) {
-        return;
-    }
-    t.addRollBack([this, &newRef, &ref, &develop]() noexcept {
-        auto result = this->repo.remove(newRef, develop);
-        if (!result) {
-            qCritical() << result.error();
+    t.addRollBack([this, &newRef, &modules]() noexcept {
+        for (const auto &module : modules) {
+            auto result = this->repo.remove(newRef, module);
+            if (!result) {
+                qCritical() << "Failed to remove new package: " << newRef.toString();
+            }
         }
+    });
+    for (const auto &module : modules) {
+        qDebug() << "update module:" << QString::fromStdString(module);
+        this->InstallRef(taskContext, newRef, module);
+        if (taskContext.currentStatus() == InstallTask::Failed
+            || taskContext.currentStatus() == InstallTask::Canceled) {
+            auto msg = QString("Upgrade %1/%3 to %2/%3 faield")
+                         .arg(ref.toString())
+                         .arg(newRef.toString())
+                         .arg(module.c_str());
+            taskContext.updateStatus(InstallTask::Failed, msg);
+            return;
+        }
+    }
+    t.addRollBack([this, &newRef, &ref]() noexcept {
         this->repo.unexportReference(newRef);
         this->repo.exportReference(ref);
     });
-
     this->repo.unexportReference(ref);
     this->repo.exportReference(newRef);
-
     taskContext.updateStatus(InstallTask::Success,
                              "Upgrade " + ref.toString() + "to" + newRef.toString() + " success");
     t.commit();
 
     // try to remove old version
-    auto result = this->repo.remove(ref, develop);
-    if (!result) {
-        qCritical() << "Failed to remove old package: " << ref.toString();
+    for (const auto &module : modules) {
+        auto result = this->repo.remove(ref, module);
+        if (!result) {
+            qCritical() << "Failed to remove old package: " << ref.toString();
+        }
+    }
+    auto mergeRet = this->repo.mergeModules();
+    if (!mergeRet.has_value()) {
+        qCritical() << "merge modules failed: " << mergeRet.error().message();
     }
 }
 
@@ -873,6 +843,38 @@ auto PackageManager::Search(const QVariantMap &parameters) noexcept -> QVariantM
     return result;
 }
 
+QVariantMap PackageManager::Migrate() noexcept
+{
+    qDebug() << "migrate request from:" << message().service();
+
+    auto *migrate = new linglong::service::Migrate(this);
+    new linglong::adaptors::migrate::Migrate1(migrate);
+    auto ret =
+      utils::dbus::registerDBusObject(connection(), "/org/deepin/linglong/Migrate1", migrate);
+    if (!ret) {
+        return toDBusReply(ret);
+    }
+
+    QMetaObject::invokeMethod(
+      QCoreApplication::instance(),
+      [this, migrate]() {
+          auto ret = this->repo.dispatchMigration();
+          if (!ret) {
+              Q_EMIT migrate->MigrateDone(ret.error().code(), ret.error().message());
+          } else {
+              Q_EMIT migrate->MigrateDone(0, "migrate successfully");
+          }
+
+          migrate->deleteLater();
+      },
+      Qt::QueuedConnection);
+
+    return utils::serialize::toQVariantMap(api::types::v1::CommonResult{
+      .code = 0,
+      .message = "package manager is migrating data",
+    });
+}
+
 void PackageManager::CancelTask(const QString &taskID) noexcept
 {
     auto task = std::find_if(taskList.begin(), taskList.end(), [&taskID](const InstallTask &task) {
@@ -890,7 +892,7 @@ void PackageManager::CancelTask(const QString &taskID) noexcept
 
 void PackageManager::pullDependency(InstallTask &taskContext,
                                     const api::types::v1::PackageInfoV2 &info,
-                                    bool develop) noexcept
+                                    const std::string &module) noexcept
 {
     if (info.kind != "app") {
         return;
@@ -918,24 +920,24 @@ void PackageManager::pullDependency(InstallTask &taskContext,
         }
 
         taskContext.updateStatus(InstallTask::installRuntime,
-                                     "Installing runtime " + runtime->toString());
+                                 "Installing runtime " + runtime->toString());
 
         // 如果runtime已存在，则直接使用, 否则从远程拉取
-        auto runtimeLayerDir = repo.getLayerDir(*runtime, develop);
+        auto runtimeLayerDir = repo.getLayerDir(*runtime, module);
         if (!runtimeLayerDir) {
             if (taskContext.currentStatus() == InstallTask::Canceled) {
                 return;
             }
 
-            this->repo.pull(taskContext, *runtime, develop);
+            this->repo.pull(taskContext, *runtime, module);
 
             if (taskContext.currentStatus() == InstallTask::Canceled
                 || taskContext.currentStatus() == InstallTask::Failed) {
                 return;
             }
 
-            transaction.addRollBack([this, runtimeRef = *runtime, develop]() noexcept {
-                auto result = this->repo.remove(runtimeRef, develop);
+            transaction.addRollBack([this, runtimeRef = *runtime, module]() noexcept {
+                auto result = this->repo.remove(runtimeRef, module);
                 if (!result) {
                     qCritical() << result.error();
                     Q_ASSERT(false);
@@ -963,13 +965,13 @@ void PackageManager::pullDependency(InstallTask &taskContext,
     taskContext.updateStatus(InstallTask::installBase, "Installing base " + base->toString());
 
     // 如果base已存在，则直接使用, 否则从远程拉取
-    auto baseLayerDir = repo.getLayerDir(*base, develop);
+    auto baseLayerDir = repo.getLayerDir(*base, module);
     if (!baseLayerDir) {
         if (taskContext.currentStatus() == InstallTask::Canceled) {
             return;
         }
 
-        this->repo.pull(taskContext, *base, develop);
+        this->repo.pull(taskContext, *base, module);
 
         if (taskContext.currentStatus() == InstallTask::Canceled
             || taskContext.currentStatus() == InstallTask::Failed) {

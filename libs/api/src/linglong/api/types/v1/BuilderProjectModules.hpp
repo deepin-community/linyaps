@@ -9,7 +9,7 @@
 //
 //  Then include this file, and then do
 //
-//     Info.hpp data = nlohmann::json::parse(jsonString);
+//     BuilderProjectModules.hpp data = nlohmann::json::parse(jsonString);
 
 #pragma once
 
@@ -21,17 +21,24 @@ namespace linglong {
 namespace api {
 namespace types {
 namespace v1 {
+/**
+* items of modules of builder project
+*/
+
 using nlohmann::json;
 
-struct Info {
 /**
-* reference of application
+* items of modules of builder project
 */
-std::string appRef;
+struct BuilderProjectModules {
 /**
-* uuid of imported uab
+* module install files
 */
-std::string uuid;
+std::string files;
+/**
+* module name
+*/
+std::string name;
 };
 }
 }

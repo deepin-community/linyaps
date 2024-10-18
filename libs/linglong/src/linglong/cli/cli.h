@@ -7,17 +7,12 @@
 #pragma once
 
 #include "linglong/api/dbus/v1/package_manager.h"
+#include "linglong/cli/interactive_notifier.h"
 #include "linglong/cli/printer.h"
 #include "linglong/repo/ostree_repo.h"
 #include "linglong/runtime/container_builder.h"
 
 #include <docopt.h>
-
-#include <QCommandLineOption>
-#include <QCommandLineParser>
-#include <QCoreApplication>
-
-#include <csignal>
 
 namespace linglong::cli {
 
@@ -35,6 +30,7 @@ public:
         runtime::ContainerBuilder &containerBuidler,
         api::dbus::v1::PackageManager &pkgMan,
         repo::OSTreeRepo &repo,
+        std::unique_ptr<InteractiveNotifier> &&notifier,
         QObject *parent = nullptr);
 
     static const char USAGE[];
@@ -44,6 +40,7 @@ private:
     ocppi::cli::CLI &ociCLI;
     runtime::ContainerBuilder &containerBuilder;
     repo::OSTreeRepo &repository;
+    std::unique_ptr<InteractiveNotifier> notifier;
     api::dbus::v1::PackageManager &pkgMan;
     QString taskID;
     bool taskDone{ true };
@@ -54,8 +51,6 @@ private:
     static void filterPackageInfosFromType(std::vector<api::types::v1::PackageInfoV2> &list,
                                            const QString &type) noexcept;
     void updateAM() noexcept;
-    [[nodiscard]] utils::error::Result<package::LayerDir> getDependLayerDir(
-      const package::Reference &appRef, const package::Reference &ref) const noexcept;
 
 public:
     int run(std::map<std::string, docopt::value> &args);
@@ -71,6 +66,7 @@ public:
     int repo(std::map<std::string, docopt::value> &args);
     int info(std::map<std::string, docopt::value> &args);
     int content(std::map<std::string, docopt::value> &args);
+    int migrate(std::map<std::string, docopt::value> &args);
 
     void cancelCurrentTask();
 
@@ -80,6 +76,10 @@ private Q_SLOTS:
                                const QString &percentage,
                                const QString &message,
                                int status);
+    void forwardMigrateDone(int code, QString message);
+
+Q_SIGNALS:
+    void migrateDone(int code, QString message, QPrivateSignal);
 };
 
 } // namespace linglong::cli

@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.11.4)
 
 project(
   linglong
-  VERSION 1.7.0
+  VERSION 1.6.1
   DESCRIPTION "a container based application package manager for Linux desktop"
   HOMEPAGE_URL "https://github.com/OpenAtom-Linyaps/linyaps"
   LANGUAGES CXX)
@@ -183,7 +183,6 @@ pfl_add_libraries(
   ll-package-manager
   llpkg
   uab
-  ll-session-helper
-  ll-store-installer)
+  ll-session-helper)
 
 add_subdirectory(misc)

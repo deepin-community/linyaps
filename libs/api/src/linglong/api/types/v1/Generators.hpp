@@ -23,6 +23,7 @@
 #include "linglong/api/types/v1/Sections.hpp"
 #include "linglong/api/types/v1/UabLayer.hpp"
 #include "linglong/api/types/v1/RepositoryCache.hpp"
+#include "linglong/api/types/v1/RepositoryCacheMergedItem.hpp"
 #include "linglong/api/types/v1/RepositoryCacheLayersItem.hpp"
 #include "linglong/api/types/v1/RepoConfig.hpp"
 #include "linglong/api/types/v1/PackageManager1UpdateParameters.hpp"
@@ -39,14 +40,15 @@
 #include "linglong/api/types/v1/PackageInfoV2.hpp"
 #include "linglong/api/types/v1/PackageInfo.hpp"
 #include "linglong/api/types/v1/OciConfigurationPatch.hpp"
-#include "linglong/api/types/v1/MinifiedInfo.hpp"
-#include "linglong/api/types/v1/Info.hpp"
 #include "linglong/api/types/v1/LayerInfo.hpp"
+#include "linglong/api/types/v1/InteractionRequest.hpp"
+#include "linglong/api/types/v1/InteractionReply.hpp"
 #include "linglong/api/types/v1/CommonResult.hpp"
 #include "linglong/api/types/v1/CliContainer.hpp"
 #include "linglong/api/types/v1/BuilderProject.hpp"
 #include "linglong/api/types/v1/BuilderProjectSource.hpp"
 #include "linglong/api/types/v1/BuilderProjectPackage.hpp"
+#include "linglong/api/types/v1/BuilderProjectModules.hpp"
 #include "linglong/api/types/v1/BuilderConfig.hpp"
 #include "linglong/api/types/v1/ApplicationConfiguration.hpp"
 #include "linglong/api/types/v1/ApplicationConfigurationPermissions.hpp"
@@ -72,6 +74,9 @@ void to_json(json & j, const ApplicationConfiguration & x);
 void from_json(const json & j, BuilderConfig & x);
 void to_json(json & j, const BuilderConfig & x);
 
+void from_json(const json & j, BuilderProjectModules & x);
+void to_json(json & j, const BuilderProjectModules & x);
+
 void from_json(const json & j, BuilderProjectPackage & x);
 void to_json(json & j, const BuilderProjectPackage & x);
 
@@ -87,14 +92,14 @@ void to_json(json & j, const CliContainer & x);
 void from_json(const json & j, CommonResult & x);
 void to_json(json & j, const CommonResult & x);
 
+void from_json(const json & j, InteractionReply & x);
+void to_json(json & j, const InteractionReply & x);
+
+void from_json(const json & j, InteractionRequest & x);
+void to_json(json & j, const InteractionRequest & x);
+
 void from_json(const json & j, LayerInfo & x);
 void to_json(json & j, const LayerInfo & x);
-
-void from_json(const json & j, Info & x);
-void to_json(json & j, const Info & x);
-
-void from_json(const json & j, MinifiedInfo & x);
-void to_json(json & j, const MinifiedInfo & x);
 
 void from_json(const json & j, OciConfigurationPatch & x);
 void to_json(json & j, const OciConfigurationPatch & x);
@@ -143,6 +148,9 @@ void to_json(json & j, const RepoConfig & x);
 
 void from_json(const json & j, RepositoryCacheLayersItem & x);
 void to_json(json & j, const RepositoryCacheLayersItem & x);
+
+void from_json(const json & j, RepositoryCacheMergedItem & x);
+void to_json(json & j, const RepositoryCacheMergedItem & x);
 
 void from_json(const json & j, RepositoryCache & x);
 void to_json(json & j, const RepositoryCache & x);
@@ -217,10 +225,12 @@ x.arch = get_stack_optional<std::string>(j, "arch");
 x.cache = get_stack_optional<std::string>(j, "cache");
 x.offline = get_stack_optional<bool>(j, "offline");
 x.repo = j.at("repo").get<std::string>();
+x.skipCheckOutput = get_stack_optional<bool>(j, "skip_check_output");
 x.skipCommitOutput = get_stack_optional<bool>(j, "skip_commit_output");
 x.skipFetchSource = get_stack_optional<bool>(j, "skip_fetch_source");
 x.skipPullDepend = get_stack_optional<bool>(j, "skip_pull_depend");
 x.skipRunContainer = get_stack_optional<bool>(j, "skip_run_container");
+x.skipStripSymbols = get_stack_optional<bool>(j, "skip_strip_symbols");
 x.version = j.at("version").get<int64_t>();
 }
 
@@ -236,6 +246,9 @@ if (x.offline) {
 j["offline"] = x.offline;
 }
 j["repo"] = x.repo;
+if (x.skipCheckOutput) {
+j["skip_check_output"] = x.skipCheckOutput;
+}
 if (x.skipCommitOutput) {
 j["skip_commit_output"] = x.skipCommitOutput;
 }
@@ -248,7 +261,21 @@ j["skip_pull_depend"] = x.skipPullDepend;
 if (x.skipRunContainer) {
 j["skip_run_container"] = x.skipRunContainer;
 }
+if (x.skipStripSymbols) {
+j["skip_strip_symbols"] = x.skipStripSymbols;
+}
 j["version"] = x.version;
+}
+
+inline void from_json(const json & j, BuilderProjectModules& x) {
+x.files = j.at("files").get<std::string>();
+x.name = j.at("name").get<std::string>();
+}
+
+inline void to_json(json & j, const BuilderProjectModules & x) {
+j = json::object();
+j["files"] = x.files;
+j["name"] = x.name;
 }
 
 inline void from_json(const json & j, BuilderProjectPackage& x) {
@@ -311,7 +338,7 @@ x.build = j.at("build").get<std::string>();
 x.command = get_stack_optional<std::vector<std::string>>(j, "command");
 x.exclude = get_stack_optional<std::vector<std::string>>(j, "exclude");
 x.include = get_stack_optional<std::vector<std::string>>(j, "include");
-x.modules = get_stack_optional<std::map<std::string, std::vector<std::string>>>(j, "modules");
+x.modules = get_stack_optional<std::vector<BuilderProjectModules>>(j, "modules");
 x.package = j.at("package").get<BuilderProjectPackage>();
 x.permissions = get_stack_optional<ApplicationConfigurationPermissions>(j, "permissions");
 x.runtime = get_stack_optional<std::string>(j, "runtime");
@@ -376,6 +403,38 @@ j["code"] = x.code;
 j["message"] = x.message;
 }
 
+inline void from_json(const json & j, InteractionReply& x) {
+x.action = get_stack_optional<std::string>(j, "action");
+}
+
+inline void to_json(json & j, const InteractionReply & x) {
+j = json::object();
+if (x.action) {
+j["action"] = x.action;
+}
+}
+
+inline void from_json(const json & j, InteractionRequest& x) {
+x.actions = get_stack_optional<std::vector<std::string>>(j, "actions");
+x.appName = j.at("appName").get<std::string>();
+x.body = get_stack_optional<std::string>(j, "body");
+x.summary = j.at("summary").get<std::string>();
+x.timeout = j.at("timeout").get<int64_t>();
+}
+
+inline void to_json(json & j, const InteractionRequest & x) {
+j = json::object();
+if (x.actions) {
+j["actions"] = x.actions;
+}
+j["appName"] = x.appName;
+if (x.body) {
+j["body"] = x.body;
+}
+j["summary"] = x.summary;
+j["timeout"] = x.timeout;
+}
+
 inline void from_json(const json & j, LayerInfo& x) {
 x.info = get_untyped(j, "info");
 x.version = j.at("version").get<std::string>();
@@ -385,26 +444,6 @@ inline void to_json(json & j, const LayerInfo & x) {
 j = json::object();
 j["info"] = x.info;
 j["version"] = x.version;
-}
-
-inline void from_json(const json & j, Info& x) {
-x.appRef = j.at("appRef").get<std::string>();
-x.uuid = j.at("uuid").get<std::string>();
-}
-
-inline void to_json(json & j, const Info & x) {
-j = json::object();
-j["appRef"] = x.appRef;
-j["uuid"] = x.uuid;
-}
-
-inline void from_json(const json & j, MinifiedInfo& x) {
-x.infos = j.at("infos").get<std::vector<Info>>();
-}
-
-inline void to_json(json & j, const MinifiedInfo & x) {
-j = json::object();
-j["infos"] = x.infos;
 }
 
 inline void from_json(const json & j, OciConfigurationPatch& x) {
@@ -473,6 +512,7 @@ x.permissions = get_stack_optional<ApplicationConfigurationPermissions>(j, "perm
 x.runtime = get_stack_optional<std::string>(j, "runtime");
 x.schemaVersion = j.at("schema_version").get<std::string>();
 x.size = j.at("size").get<int64_t>();
+x.uuid = get_stack_optional<std::string>(j, "uuid");
 x.version = j.at("version").get<std::string>();
 }
 
@@ -499,6 +539,9 @@ j["runtime"] = x.runtime;
 }
 j["schema_version"] = x.schemaVersion;
 j["size"] = x.size;
+if (x.uuid) {
+j["uuid"] = x.uuid;
+}
 j["version"] = x.version;
 }
 
@@ -655,18 +698,43 @@ j["version"] = x.version;
 inline void from_json(const json & j, RepositoryCacheLayersItem& x) {
 x.commit = j.at("commit").get<std::string>();
 x.info = j.at("info").get<PackageInfoV2>();
+x.repo = j.at("repo").get<std::string>();
 }
 
 inline void to_json(json & j, const RepositoryCacheLayersItem & x) {
 j = json::object();
 j["commit"] = x.commit;
 j["info"] = x.info;
+j["repo"] = x.repo;
+}
+
+inline void from_json(const json & j, RepositoryCacheMergedItem& x) {
+x.binaryCommit = get_stack_optional<std::string>(j, "binaryCommit");
+x.commits = j.at("commits").get<std::vector<std::string>>();
+x.id = j.at("id").get<std::string>();
+x.modules = j.at("modules").get<std::vector<std::string>>();
+x.name = get_stack_optional<std::string>(j, "name");
+}
+
+inline void to_json(json & j, const RepositoryCacheMergedItem & x) {
+j = json::object();
+if (x.binaryCommit) {
+j["binaryCommit"] = x.binaryCommit;
+}
+j["commits"] = x.commits;
+j["id"] = x.id;
+j["modules"] = x.modules;
+if (x.name) {
+j["name"] = x.name;
+}
 }
 
 inline void from_json(const json & j, RepositoryCache& x) {
 x.config = j.at("config").get<RepoConfig>();
-x.layers = j.at("layers").get<std::map<std::string, RepositoryCacheLayersItem>>();
+x.layers = j.at("layers").get<std::vector<RepositoryCacheLayersItem>>();
 x.llVersion = j.at("ll-version").get<std::string>();
+x.merged = get_stack_optional<std::vector<RepositoryCacheMergedItem>>(j, "merged");
+x.migratingStage = get_stack_optional<std::vector<int64_t>>(j, "migrating_stage");
 x.version = j.at("version").get<std::string>();
 }
 
@@ -675,6 +743,12 @@ j = json::object();
 j["config"] = x.config;
 j["layers"] = x.layers;
 j["ll-version"] = x.llVersion;
+if (x.merged) {
+j["merged"] = x.merged;
+}
+if (x.migratingStage) {
+j["migrating_stage"] = x.migratingStage;
+}
 j["version"] = x.version;
 }
 
@@ -726,8 +800,9 @@ x.builderConfig = get_stack_optional<BuilderConfig>(j, "BuilderConfig");
 x.builderProject = get_stack_optional<BuilderProject>(j, "BuilderProject");
 x.cliContainer = get_stack_optional<CliContainer>(j, "CLIContainer");
 x.commonResult = get_stack_optional<CommonResult>(j, "CommonResult");
+x.interactionReply = get_stack_optional<InteractionReply>(j, "InteractionReply");
+x.interactionRequest = get_stack_optional<InteractionRequest>(j, "InteractionRequest");
 x.layerInfo = get_stack_optional<LayerInfo>(j, "LayerInfo");
-x.minifiedInfo = get_stack_optional<MinifiedInfo>(j, "MinifiedInfo");
 x.ociConfigurationPatch = get_stack_optional<OciConfigurationPatch>(j, "OCIConfigurationPatch");
 x.packageInfo = get_stack_optional<PackageInfo>(j, "PackageInfo");
 x.packageInfoV2 = get_stack_optional<PackageInfoV2>(j, "PackageInfoV2");
@@ -736,6 +811,7 @@ x.packageManager1InstallLayerFDResult = get_stack_optional<CommonResult>(j, "Pac
 x.packageManager1InstallParameters = get_stack_optional<PackageManager1InstallParameters>(j, "PackageManager1InstallParameters");
 x.packageManager1InstallResult = get_stack_optional<PackageManager1ResultWithTaskID>(j, "PackageManager1InstallResult");
 x.packageManager1JobInfo = get_stack_optional<PackageManager1JobInfo>(j, "PackageManager1JobInfo");
+x.packageManager1MigrateResult = get_stack_optional<CommonResult>(j, "PackageManager1MigrateResult");
 x.packageManager1ModifyRepoParameters = get_stack_optional<PackageManager1ModifyRepoParameters>(j, "PackageManager1ModifyRepoParameters");
 x.packageManager1ModifyRepoResult = get_stack_optional<CommonResult>(j, "PackageManager1ModifyRepoResult");
 x.packageManager1Package = get_stack_optional<PackageManager1Package>(j, "PackageManager1Package");
@@ -770,11 +846,14 @@ j["CLIContainer"] = x.cliContainer;
 if (x.commonResult) {
 j["CommonResult"] = x.commonResult;
 }
+if (x.interactionReply) {
+j["InteractionReply"] = x.interactionReply;
+}
+if (x.interactionRequest) {
+j["InteractionRequest"] = x.interactionRequest;
+}
 if (x.layerInfo) {
 j["LayerInfo"] = x.layerInfo;
-}
-if (x.minifiedInfo) {
-j["MinifiedInfo"] = x.minifiedInfo;
 }
 if (x.ociConfigurationPatch) {
 j["OCIConfigurationPatch"] = x.ociConfigurationPatch;
@@ -799,6 +878,9 @@ j["PackageManager1InstallResult"] = x.packageManager1InstallResult;
 }
 if (x.packageManager1JobInfo) {
 j["PackageManager1JobInfo"] = x.packageManager1JobInfo;
+}
+if (x.packageManager1MigrateResult) {
+j["PackageManager1MigrateResult"] = x.packageManager1MigrateResult;
 }
 if (x.packageManager1ModifyRepoParameters) {
 j["PackageManager1ModifyRepoParameters"] = x.packageManager1ModifyRepoParameters;

@@ -7,6 +7,8 @@
 #include "linglong/cli/cli.h"
 
 #include "linglong/api/types/v1/CommonResult.hpp"
+#include "linglong/api/types/v1/InteractionReply.hpp"
+#include "linglong/api/types/v1/InteractionRequest.hpp"
 #include "linglong/api/types/v1/PackageManager1InstallParameters.hpp"
 #include "linglong/api/types/v1/PackageManager1JobInfo.hpp"
 #include "linglong/api/types/v1/PackageManager1Package.hpp"
@@ -47,21 +49,27 @@ Usage:
     ll-cli [--json] exec PAGODA [--working-directory=PATH] [--] COMMAND...
     ll-cli [--json] enter PAGODA [--working-directory=PATH] [--] [COMMAND...]
     ll-cli [--json] kill PAGODA
-    ll-cli [--json] [--no-dbus] install TIER
-    ll-cli [--json] uninstall TIER [--all] [--prune]
+    ll-cli [--json] [--no-dbus] install [--module=MODULE] TIER
+    ll-cli [--json] uninstall [--module=MODULE] TIER [--all] [--prune]
     ll-cli [--json] upgrade TIER
     ll-cli [--json] search [--type=TYPE] [--dev] TEXT
     ll-cli [--json] [--no-dbus] list [--type=TYPE]
     ll-cli [--json] repo modify [--name=REPO] URL
+    ll-cli [--json] repo add NAME URL
+    ll-cli [--json] repo remove NAME
+    ll-cli [--json] repo update NAME URL
+    ll-cli [--json] repo set-default NAME
     ll-cli [--json] repo show
     ll-cli [--json] info TIER
     ll-cli [--json] content APP
+    ll-cli [--json] migrate
 
 Arguments:
     APP     Specify the application.
     PAGODA  Specify the pagodas (container).
     TIER    Specify the tier (container layer).
-    URL     Specify the new repo URL.
+    NAME    Specify the repo name.
+    URL     Specify the repo URL.
     TEXT    The text used to search tiers.
 
 Options:
@@ -135,56 +143,16 @@ Cli::Cli(Printer &printer,
          runtime::ContainerBuilder &containerBuilder,
          api::dbus::v1::PackageManager &pkgMan,
          repo::OSTreeRepo &repo,
+         std::unique_ptr<InteractiveNotifier> &&notifier,
          QObject *parent)
     : QObject(parent)
     , printer(printer)
     , ociCLI(ociCLI)
     , containerBuilder(containerBuilder)
     , repository(repo)
+    , notifier(std::move(notifier))
     , pkgMan(pkgMan)
 {
-}
-
-utils::error::Result<package::LayerDir> Cli::getDependLayerDir(
-  const package::Reference &appRef, const package::Reference &dependRef) const noexcept
-{
-    LINGLONG_TRACE("get layer dir of depends")
-
-    auto appLayerDir = this->repository.getLayerDir(appRef);
-    if (!appLayerDir) {
-        return LINGLONG_ERR(appLayerDir);
-    }
-
-    auto dependLayerDir = this->repository.getLayerDir(dependRef);
-    if (!dependLayerDir) {
-        return LINGLONG_ERR(dependLayerDir);
-    }
-
-    if (!appLayerDir->exists(QString{ ".minified-%1" }.arg(dependRef.id))) {
-        return dependLayerDir;
-    }
-
-    auto minified = utils::serialize::LoadJSONFile<api::types::v1::MinifiedInfo>(
-      dependLayerDir->absoluteFilePath("minified.json"));
-    if (!minified) {
-        return LINGLONG_ERR(minified);
-    }
-
-    const auto &appRefStr = appRef.toString().toStdString();
-    QString subRef;
-    for (const auto &[appRef, uuid] : minified->infos) {
-        if (appRef == appRefStr) {
-            subRef = QString{ "minified/%1" }.arg(QString::fromStdString(uuid));
-            break;
-        }
-    }
-
-    if (subRef.isEmpty()) {
-        return LINGLONG_ERR("couldn't find the association between app and depend in minified.json "
-                            "which under the layer directory.");
-    }
-
-    return this->repository.getLayerDir(dependRef, false, subRef);
 }
 
 int Cli::run(std::map<std::string, docopt::value> &args)
@@ -209,8 +177,7 @@ int Cli::run(std::map<std::string, docopt::value> &args)
         this->printer.printErr(curAppRef.error());
         return -1;
     }
-
-    auto appLayerDir = this->repository.getLayerDir(*curAppRef, false);
+    auto appLayerDir = this->repository.getMergedModuleDir(*curAppRef);
     if (!appLayerDir) {
         this->printer.printErr(appLayerDir.error());
         return -1;
@@ -240,14 +207,22 @@ int Cli::run(std::map<std::string, docopt::value> &args)
             this->printer.printErr(runtimeRef.error());
             return -1;
         }
-
-        auto dependRet = getDependLayerDir(*curAppRef, *runtimeRef);
-        if (!dependRet) {
-            this->printer.printErr(dependRet.error());
-            return -1;
+        if (info->uuid->empty()) {
+            auto runtimeLayerDirRet = this->repository.getMergedModuleDir(*runtimeRef);
+            if (!runtimeLayerDirRet) {
+                this->printer.printErr(runtimeLayerDirRet.error());
+                return -1;
+            }
+            runtimeLayerDir = *runtimeLayerDirRet;
+        } else {
+            auto runtimeLayerDirRet =
+              this->repository.getLayerDir(*runtimeRef, std::string{ "binary" }, info->uuid);
+            if (!runtimeLayerDirRet) {
+                this->printer.printErr(runtimeLayerDirRet.error());
+                return -1;
+            }
+            runtimeLayerDir = *runtimeLayerDirRet;
         }
-
-        runtimeLayerDir = *dependRet;
     }
 
     auto baseFuzzyRef = package::FuzzyReference::parse(QString::fromStdString(info->base));
@@ -265,8 +240,14 @@ int Cli::run(std::map<std::string, docopt::value> &args)
         this->printer.printErr(LINGLONG_ERRV(baseRef));
         return -1;
     }
-
-    auto baseLayerDir = getDependLayerDir(*curAppRef, *baseRef);
+    utils::error::Result<package::LayerDir> baseLayerDir;
+    if (!info->uuid.has_value()) {
+        qDebug() << "getMergedModuleDir base";
+        baseLayerDir = this->repository.getMergedModuleDir(*baseRef);
+    } else {
+        qDebug() << "getLayerDir base" << info->uuid->c_str();
+        baseLayerDir = this->repository.getLayerDir(*baseRef, std::string{ "binary" }, info->uuid);
+    }
     if (!baseLayerDir) {
         this->printer.printErr(LINGLONG_ERRV(baseLayerDir));
         return -1;
@@ -655,6 +636,9 @@ int Cli::install(std::map<std::string, docopt::value> &args)
     if (fuzzyRef->version) {
         params.package.version = fuzzyRef->version->toString().toStdString();
     }
+    if (args["--module"].isString()) {
+        params.package.packageManager1PackageModule = args["--module"].asString();
+    }
 
     auto pendingReply = this->pkgMan.Install(utils::serialize::toQVariantMap(params));
     auto reply = pendingReply.value();
@@ -875,7 +859,9 @@ int Cli::uninstall(std::map<std::string, docopt::value> &args)
     if (fuzzyRef->version) {
         params.package.version = fuzzyRef->version->toString().toStdString();
     }
-
+    if (args["--module"].isString()) {
+        params.package.packageManager1PackageModule = args["--module"].asString();
+    }
     auto reply = this->pkgMan.Uninstall(utils::serialize::toQVariantMap(params));
     reply.waitForFinished();
     if (!reply.isValid()) {
@@ -923,35 +909,107 @@ int Cli::repo(std::map<std::string, docopt::value> &args)
     LINGLONG_TRACE("command repo");
 
     auto propCfg = this->pkgMan.configuration();
-    auto tmp = propCfg.value("repos");
-
     auto cfg = utils::serialize::fromQVariantMap<api::types::v1::RepoConfig>(propCfg);
     if (!cfg) {
         qCritical() << cfg.error();
         qCritical() << "linglong bug detected.";
         std::abort();
     }
+    auto &cfgRef = *cfg;
 
-    if (!args["modify"].asBool()) {
+    if (args.empty() || args["show"].asBool()) {
         this->printer.printRepoConfig(*cfg);
         return 0;
     }
 
-    std::string url;
-    if (args["--name"].isString()) {
-        cfg->defaultRepo = args["--name"].asString();
+    if (args["modify"].asBool()) {
+        this->printer.printErr(
+          LINGLONG_ERRV("sub-command 'modify' already has been deprecated, please use sub-command "
+                        "'add' to add a remote repository and use it as default."));
+        return EINVAL;
     }
+
+    std::string name;
+    if (!args["NAME"].isString()) {
+        this->printer.printErr(LINGLONG_ERRV("repo name must be specified as string"));
+        return EINVAL;
+    }
+    name = args["NAME"].asString();
+
+    std::string url;
     if (args["URL"].isString()) {
+        // TODO: verify more complexly
         url = args["URL"].asString();
+        if (url.rfind("http", 0) != 0) {
+            this->printer.printErr(LINGLONG_ERRV(QString{ "url is invalid: " } + url.c_str()));
+            return EINVAL;
+        }
+
         // remove last slash
-        if (url.at(url.length() - 1) == '/') {
+        if (url.back() == '/') {
             url.pop_back();
         }
     }
 
-    cfg->repos[cfg->defaultRepo] = url;
-    this->pkgMan.setConfiguration(utils::serialize::toQVariantMap(*cfg));
-    return 0;
+    if (args["add"].asBool()) {
+        if (url.empty()) {
+            this->printer.printErr(LINGLONG_ERRV("url is empty."));
+            return EINVAL;
+        }
+
+        auto ret = cfgRef.repos.try_emplace(name, url);
+        if (!ret.second) {
+            this->printer.printErr(
+              LINGLONG_ERRV(QString{ "repo " } + name.c_str() + " already exist."));
+            return -1;
+        }
+
+        this->pkgMan.setConfiguration(utils::serialize::toQVariantMap(cfgRef));
+        return 0;
+    }
+
+    auto existingRepo = cfgRef.repos.find(name);
+    if (existingRepo == cfgRef.repos.cend()) {
+        this->printer.printErr(
+          LINGLONG_ERRV(QString{ "the operated repo " } + name.c_str() + " doesn't exist"));
+        return -1;
+    }
+
+    if (args["remove"].asBool()) {
+        if (cfgRef.defaultRepo == name) {
+            this->printer.printErr(
+              LINGLONG_ERRV(QString{ "repo " } + name.c_str()
+                            + "is default repo, please change default repo before removing it."));
+            return -1;
+        }
+
+        cfgRef.repos.erase(existingRepo);
+        this->pkgMan.setConfiguration(utils::serialize::toQVariantMap(cfgRef));
+        return 0;
+    }
+
+    if (args["update"].asBool()) {
+        if (url.empty()) {
+            this->printer.printErr(LINGLONG_ERRV("url is empty."));
+            return -1;
+        }
+
+        existingRepo->second = url;
+        this->pkgMan.setConfiguration(utils::serialize::toQVariantMap(cfgRef));
+        return 0;
+    }
+
+    if (args["set-default"].asBool()) {
+        if (cfgRef.defaultRepo != name) {
+            cfgRef.defaultRepo = name;
+            this->pkgMan.setConfiguration(utils::serialize::toQVariantMap(cfgRef));
+        }
+
+        return 0;
+    }
+
+    this->printer.printErr(LINGLONG_ERRV("unknown operation"));
+    return -1;
 }
 
 int Cli::info(std::map<std::string, docopt::value> &args)
@@ -989,7 +1047,7 @@ int Cli::info(std::map<std::string, docopt::value> &args)
             return -1;
         }
 
-        auto layer = this->repository.getLayerDir(*ref);
+        auto layer = this->repository.getLayerDir(*ref, "binary");
         if (!layer) {
             this->printer.printErr(layer.error());
             return -1;
@@ -1047,7 +1105,7 @@ int Cli::content(std::map<std::string, docopt::value> &args)
         return -1;
     }
 
-    auto layer = this->repository.getLayerDir(*ref);
+    auto layer = this->repository.getLayerDir(*ref, "binary");
     if (!layer) {
         this->printer.printErr(layer.error());
         return -1;
@@ -1079,6 +1137,143 @@ int Cli::content(std::map<std::string, docopt::value> &args)
 
     this->printer.printContent(contents);
     return 0;
+}
+
+int Cli::migrate([[maybe_unused]] std::map<std::string, docopt::value> &args)
+{
+    LINGLONG_TRACE("cli migrate")
+
+    if (!notifier) {
+        qCritical() << "there hasn't notifier, abort migrate.";
+        return -1;
+    }
+
+    std::vector<std::string> actions{ "Yes", "No" };
+    for (auto it = actions.begin(); it != actions.end(); ++it) {
+        // May be we need localization in the future
+        it = actions.insert(it + 1, *it);
+    }
+
+    api::types::v1::InteractionRequest req{
+        .actions = actions,
+        .body = "Do you want to migrate immediately?\nThis will stop all runnning applications.",
+        .summary = "Package Manager needs to migrate data.",
+    };
+
+    while (true) {
+        auto reply = notifier->request(req);
+        if (!reply) {
+            qCritical() << "internal error: notify failed";
+            std::abort();
+        }
+
+        auto action = reply->action.value_or("No");
+        if (action == "Yes") {
+            qDebug() << "approve migration";
+            break;
+        }
+
+        auto ret = notifier->notify(
+          { .summary = "you could run 'll-cli migrate' on later to migrating data." });
+        if (!ret) {
+            this->printer.printErr(ret.error());
+            return -1;
+        }
+
+        return 0;
+    }
+
+    // stop all running apps
+    // FIXME: In multi-user conditions, we couldn't kill applications which started by different
+    // user
+    auto containers = this->ociCLI.list();
+    if (!containers) {
+        auto err = LINGLONG_ERRV(containers);
+        this->printer.printErr(err);
+        return -1;
+    }
+
+    for (const auto &container : *containers) {
+        auto result = this->ociCLI.kill(ocppi::runtime::ContainerID(container.id),
+                                        ocppi::runtime::Signal("SIGTERM"));
+        if (!result) {
+            auto err = LINGLONG_ERRV(result);
+            this->printer.printErr(err);
+            return -1;
+        }
+    }
+
+    // beginning migrating data
+    if (!this->pkgMan.connection().connect(this->pkgMan.service(),
+                                           "/org/deepin/linglong/Migrate1",
+                                           "org.deepin.linglong.Migrate1",
+                                           "MigrateDone",
+                                           this,
+                                           SLOT(forwardMigrateDone(int, QString)))) {
+        qFatal("couldn't connect to dbus signal MigrateDone");
+    }
+
+    int retCode = std::numeric_limits<int>::min();
+    QString retMsg;
+
+    // connecting to this lambda before connecting the second one of the slot 'quit' of event loop
+    // see comments below for details
+    QObject::connect(this, &Cli::migrateDone, [&retCode, &retMsg](int newCode, QString newMsg) {
+        retCode = newCode;
+        retMsg = std::move(newMsg);
+    });
+
+    auto reply = this->pkgMan.Migrate();
+    reply.waitForFinished();
+
+    if (!reply.isValid()) {
+        this->printer.printErr(LINGLONG_ERRV("invalid reply from migrate", -1));
+        return -1;
+    }
+
+    if (reply.isError()) {
+        this->printer.printErr(LINGLONG_ERRV(reply.error().message(), -1));
+        return -1;
+    }
+
+    auto result = utils::serialize::fromQVariantMap<api::types::v1::CommonResult>(reply.value());
+    if (!result) {
+        auto err = LINGLONG_ERR(
+          "internal bug detected, application will exit, but migration may already staring");
+        this->printer.printErr(err.value());
+        std::abort();
+    }
+
+    auto ret = notifier->notify({ .summary = result->message });
+    if (!ret) {
+        auto err = LINGLONG_ERR(
+          "internal bug detected, application will exit, but migration may already staring",
+          ret.error());
+        this->printer.printErr(err.value());
+        std::abort();
+    }
+
+    if (retCode == std::numeric_limits<int>::min()) {
+        // If a signal is connected to several slots,
+        // the slots are activated in the same order in which the connections were made,
+        // when the signal is emitted.
+        // refer: https://doc.qt.io/qt-5/qobject.html#connect
+
+        QEventLoop loop;
+        if (connect(this, &Cli::migrateDone, &loop, &QEventLoop::quit) == nullptr) {
+            qCritical() << "failed to waiting for reply";
+            return -1;
+        }
+        loop.exec();
+    }
+
+    ret = this->notifier->notify({ .summary = retMsg.toStdString() });
+    if (!ret) {
+        this->printer.printReply({ .code = retCode, .message = retMsg.toStdString() });
+        return -1;
+    }
+
+    return retCode;
 }
 
 std::vector<std::string>
@@ -1155,6 +1350,11 @@ void Cli::filterPackageInfosFromType(std::vector<api::types::v1::PackageInfoV2> 
 
     list.clear();
     std::move(temp.begin(), temp.end(), std::back_inserter(list));
+}
+
+void Cli::forwardMigrateDone(int code, QString message)
+{
+    Q_EMIT migrateDone(code, message, {});
 }
 
 } // namespace linglong::cli
