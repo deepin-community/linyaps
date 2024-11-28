@@ -30,6 +30,7 @@ pfl_add_executable(
   src/linglong/package/version_test.cpp
   src/linglong/repo/ostree_repo_test.cpp
   src/linglong/utils/error/result_test.cpp
+  src/linglong/utils/sha256_test.cpp
   src/linglong/utils/transaction_test.cpp
   src/linglong/utils/xdg/desktop_entry_test.cpp
   src/main.cpp
@@ -40,8 +41,12 @@ pfl_add_executable(
   PRIVATE
   GTest::gmock
   linglong::linglong
-  Qt::DBusPrivate)
+  PkgConfig::CRYPTO
+  Qt${QT_VERSION_MAJOR}::DBusPrivate)
 
 include(GoogleTest)
 get_real_target_name(tests linglong::linglong::ll_tests)
 gtest_discover_tests(${tests} WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR})
+
+#FIXME: we should'n include header directly
+target_include_directories(${tests} PUBLIC ${PROJECT_SOURCE_DIR}/apps/uab/header/src)
