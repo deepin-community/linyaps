@@ -29,7 +29,7 @@ set(ENABLE_LINGLONG_INSTALLER
 
 set(ENABLE_TESTTING
     ON
-    CACHE BOOL "enable testting")
+    CACHE BOOL "enable testing")
 
 set(LINGLONG_USERNAME
     "deepin-linglong"
@@ -145,6 +145,12 @@ endif()
 
 if(ENABLE_TESTTING)
   find_package(GTest REQUIRED)
+
+  # compatible with old gtest
+  if(NOT TARGET GTest::gmock)
+    message(STATUS "GTest::gmock not found, alias GTest::gtest")
+    add_library(GTest::gmock ALIAS GTest::GTest) # available since 3.5
+  endif()
 endif()
 
 function(get_real_target_name output target)
