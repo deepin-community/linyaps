@@ -94,11 +94,14 @@ public
     Prune(std::vector<api::types::v1::PackageInfoV2> &removedInfo) noexcept;
     void ReplyInteraction(QDBusObjectPath object_path, const QVariantMap &replies);
 
+    // Nothing to do here, Permissions() will be rejected in org.deepin.linglong.PackageManager.conf
+    void Permissions() { }
+
 Q_SIGNALS:
     void TaskAdded(QDBusObjectPath object_path);
     void TaskRemoved(
       QDBusObjectPath object_path, int state, int subState, QString message, double percentage);
-    void TaskListChanged(const QString &taskObjectPath);
+    void TaskListChanged(const QString &taskObjectPath, const QString &taskDescription);
     void RequestInteraction(QDBusObjectPath object_path,
                             int messageID,
                             QVariantMap additionalMessage);
