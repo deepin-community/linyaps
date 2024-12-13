@@ -940,6 +940,7 @@ set -e
 
     qDebug() << "generate entries";
     if (this->project.package.kind != "runtime") {
+        // 仅导出名单中的目录，以避免意外文件影响系统功能
         const QStringList exportPaths = {
             "share/applications", // Copy desktop files
             "share/mime",         // Copy MIME Type files
@@ -971,18 +972,19 @@ set -e
             if (!binaryFiles.exists(path)) {
                 continue;
             }
-
-            const QString dest = QString("../../files/%1").arg(path);
-
+            // appdata是旧版本的metainfo
             if (path == "share/appdata") {
-                if (!QFile::link(dest, binaryEntries.absoluteFilePath("share/metainfo"))) {
+                auto ret = copyDir(binaryFiles.absoluteFilePath(path),
+                                   binaryEntries.filePath("share/metainfo"));
+                if (!ret.has_value()) {
                     qWarning() << "link binary entries share to files share/" << path << "failed";
                 }
 
                 continue;
             }
-
-            if (!QFile::link(dest, binaryEntries.absoluteFilePath(path))) {
+            auto ret =
+              copyDir(binaryFiles.absoluteFilePath(path), binaryEntries.absoluteFilePath(path));
+            if (!ret.has_value()) {
                 qWarning() << "link binary entries " << path << "to files share: failed";
                 continue;
             }
@@ -1346,10 +1348,12 @@ utils::error::Result<void> Builder::run(const QStringList &modules,
         .mounts = {},
     };
 
-    auto baseRef = pullDependency(QString::fromStdString(this->project.base),
-                                  this->repo,
-                                  "binary",
-                                  this->buildOptions.skipPullDepend);
+    auto fuzzyBase = package::FuzzyReference::parse(QString::fromStdString(this->project.base));
+    if (!fuzzyBase) {
+        return LINGLONG_ERR(fuzzyBase);
+    }
+    auto baseRef =
+      this->repo.clearReference(*fuzzyBase, { .forceRemote = false, .fallbackToRemote = false });
     if (!baseRef) {
         return LINGLONG_ERR(baseRef);
     }
