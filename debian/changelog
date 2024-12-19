@@ -1,3 +1,13 @@
+linglong (1.7.4-1) unstable; urgency=medium
+
+  * fix: old version of ll-cli cannot export the new package
+  * fix: incorrect official website display in the DTK About dialog
+  * refactor: no need to pullDependency during ll-builder run
+  * fix: abnormal cursor size in wayland
+  * fix: PM blocked in a cancled task
+
+ -- dengbo <dengbo@deepin.org>  Wed, 18 Dec 2024 16:20:06 +0800
+
 linglong (1.7.3-1) unstable; urgency=medium
 
   * release 1.7.3-1

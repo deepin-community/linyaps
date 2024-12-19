@@ -116,18 +116,17 @@ PackageManager::PackageManager(linglong::repo::OSTreeRepo &repo, QObject *parent
               }
               return;
           }
-          // start next task
-          this->runningTaskObjectPath = taskObjectPath;
-          if (this->taskList.empty()) {
-              this->runningTaskObjectPath = "";
-              return;
-          };
-          for (auto it = taskList.begin(); it != taskList.end(); ++it) {
+
+          for (auto it = taskList.begin(); it != taskList.end();) {
               auto *task = *it;
               if (!task->getJob().has_value()
                   || task->state() != linglong::api::types::v1::State::Queued) {
+                  qInfo() << "Remove" << task->taskID()
+                          << "from task queue, it has no job or State is not Queued";
+                  it = this->taskList.erase(it);
                   continue;
               }
+              this->runningTaskObjectPath = task->taskObjectPath();
               // execute the task
               qInfo() << QString("Task %1 start.").arg(task->taskID());
               auto func = *task->getJob();
@@ -139,11 +138,11 @@ PackageManager::PackageManager(linglong::repo::OSTreeRepo &repo, QObject *parent
                                  task->message(),
                                  task->getPercentage());
               this->runningTaskObjectPath = "";
-              auto nextIt = this->taskList.erase(it);
+              it = this->taskList.erase(it);
               task->deleteLater();
-              if (nextIt != taskList.end()) {
-                  qInfo() << "Task switch to" << (*nextIt)->taskID();
-                  Q_EMIT this->TaskListChanged((*nextIt)->taskID(), "TaskSwitch");
+              if (it != taskList.end()) {
+                  qInfo() << "Switch to next available task";
+                  Q_EMIT this->TaskListChanged("", "TaskSwitch");
               }
               return;
           }
