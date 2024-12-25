@@ -1,3 +1,9 @@
+linglong (1.8.0-1) unstable; urgency=medium
+
+  * release 1.8.0
+
+ -- dengbo <dengbo@deepin.org>  Wed, 25 Dec 2024 17:11:45 +0800
+
 linglong (1.5.6-1) unstable; urgency=medium
 
   * fix: layer size error when export layer repeatedly
