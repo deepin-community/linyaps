@@ -15,5 +15,10 @@ if [ -z "${DPKG_ROOT:-}" ] && [ "$1" = remove ] && [ -d /run/systemd/system ] ; 
         # orgin script from postrm-systemd-user-reload-only
         # deb-systemd-invoke --user --no-dbus daemon-reload >/dev/null || true
 
-        systemctl --quiet kill --kill-whom=main --signal SIGHUP user@*.service
+        systemd_version=$(systemctl --version | head -n 1 | awk '{print $2}')
+        if [ "$systemd_version" -ge 252 ]; then
+                systemctl --quiet kill --kill-whom=main --signal SIGHUP user@*.service
+        else
+                systemctl --quiet kill --kill-who=main --signal SIGHUP user@*.service
+        fi
 fi
