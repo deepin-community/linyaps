@@ -2417,7 +2417,7 @@ OSTreeRepo::listLocalBy(const linglong::repo::repoCacheQuery &query) const noexc
     return this->cache->queryLayerItem(query);
 }
 
-QString getOriginRawExec(const QString &execArgs, const QString &id)
+QString getOriginRawExec(const QString &execArgs, [[maybe_unused]] const QString &id)
 {
     // Note: These strings have appeared in the app-conf-generator.sh of linglong-builder.
     // We need to remove them.
@@ -2495,7 +2495,7 @@ QString buildDesktopExec(QString origin, const QString &appID) noexcept
         break;
     }
 
-    return newExec.append(QString{ "-- -- %1" }.arg(origin));
+    return newExec.append(QString{ "-- %1" }.arg(origin));
 }
 
 utils::error::Result<void> desktopFileRewrite(const QString &filePath, const QString &id)
@@ -2579,7 +2579,7 @@ utils::error::Result<void> dbusServiceRewrite(const QString &filePath, const QSt
         rawExec = getOriginRawExec(*originExec, id);
     }
 
-    auto newExec = QString("%1 run %2 -- -- %3").arg(LINGLONG_CLIENT_PATH, id, rawExec);
+    auto newExec = QString("%1 run %2 -- %3").arg(LINGLONG_CLIENT_PATH, id, rawExec);
     file->setValue("Exec", newExec, utils::GKeyFileWrapper::DBusService);
 
     auto ret = file->saveToFile(filePath);
@@ -2623,7 +2623,7 @@ utils::error::Result<void> systemdServiceRewrite(const QString &filePath, const 
             rawExec = getOriginRawExec(*originExec, id);
         }
 
-        auto newExec = QString("%1 run %2 -- -- %3").arg(LINGLONG_CLIENT_PATH, id, rawExec);
+        auto newExec = QString("%1 run %2 -- %3").arg(LINGLONG_CLIENT_PATH, id, rawExec);
         file->setValue(key, newExec, utils::GKeyFileWrapper::SystemdService);
     }
 

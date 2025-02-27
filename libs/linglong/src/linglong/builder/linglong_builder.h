@@ -19,6 +19,7 @@ namespace linglong::builder {
 struct UABOption
 {
     QString iconPath;
+    QString loader;
     bool exportDevelop{ false };
     bool exportI18n{ false };
     bool full{ false };
@@ -82,6 +83,14 @@ public:
     auto runtimeCheck(const QStringList &modules) -> utils::error::Result<void>;
 
     void setBuildOptions(const BuilderBuildOptions &options) noexcept { buildOptions = options; }
+
+private:
+    auto generateEntryScript() noexcept -> utils::error::Result<void>;
+    auto generateBuildDependsScript() noexcept -> utils::error::Result<bool>;
+    auto generateDependsScript() noexcept -> utils::error::Result<bool>;
+    void takeTerminalForeground();
+    void patchBuildPhaseConfig(ocppi::runtime::config::types::Config &config);
+    void mergeOutput(const QList<QDir> &src, const QDir &dest, const QStringList &target);
 
 private:
     repo::OSTreeRepo &repo;

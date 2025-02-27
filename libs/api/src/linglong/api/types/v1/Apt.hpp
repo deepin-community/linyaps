@@ -9,7 +9,7 @@
 //
 //  Then include this file, and then do
 //
-//     Repo.hpp data = nlohmann::json::parse(jsonString);
+//     Apt.hpp data = nlohmann::json::parse(jsonString);
 
 #pragma once
 
@@ -22,31 +22,23 @@ namespace api {
 namespace types {
 namespace v1 {
 /**
-* Configuration for a single repository.
+* build extension for apt
 */
 
 using nlohmann::json;
 
 /**
-* Configuration for a single repository.
+* build extension for apt
 */
-struct Repo {
+struct Apt {
 /**
-* alias of repo name
+* packages to be installed in build environment before build starting
 */
-std::optional<std::string> alias;
+std::optional<std::vector<std::string>> buildDepends;
 /**
-* repo name
+* packages to be installed in runtime environment
 */
-std::string name;
-/**
-* priority of repo
-*/
-int64_t priority;
-/**
-* repo url
-*/
-std::string url;
+std::optional<std::vector<std::string>> depends;
 };
 }
 }

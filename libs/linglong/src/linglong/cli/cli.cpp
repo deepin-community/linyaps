@@ -21,6 +21,7 @@
 #include "linglong/api/types/v1/UpgradeListResult.hpp"
 #include "linglong/cli/printer.h"
 #include "linglong/package/layer_file.h"
+#include "linglong/repo/config.h"
 #include "linglong/runtime/container_builder.h"
 #include "linglong/utils/configure.h"
 #include "linglong/utils/error/error.h"
@@ -99,7 +100,7 @@ linglong::utils::error::Result<bool> isChildProcess(pid_t parent, pid_t pid) noe
         auto ppidOffset = 3;
         auto left = 0;
         auto right = 0;
-        for (int i = 0; i < content.size(); i++) {
+        for (size_t i = 0; i < content.size(); i++) {
             if (ppidOffset == 0) {
                 left = i;
                 right = i;
@@ -822,7 +823,13 @@ int Cli::exec()
 
     std::string containerID;
     for (const auto &container : *containers) {
-        if (container.package == options.instance) {
+        std::string packageName = container.package;
+        std::string::size_type colonPos = packageName.find(':');
+        std::string::size_type slashPos = packageName.find('/');
+        if (colonPos != std::string::npos && slashPos != std::string::npos) {
+            packageName = packageName.substr(colonPos + 1, slashPos - colonPos - 1);
+        }
+        if (packageName == options.instance) {
             containerID = container.id;
             break;
         }
@@ -1311,6 +1318,11 @@ int Cli::upgrade()
             }
             fuzzyRefs.emplace_back(std::move(*fuzzyRef));
         }
+    }
+
+    if (fuzzyRefs.empty()) {
+        this->printer.printReply({ .code = 0, .message = "All software packages are up to date." });
+        return 0;
     }
 
     api::types::v1::PackageManager1UpdateParameters params;
@@ -1863,16 +1875,18 @@ int Cli::repo(CLI::App *app)
 
         bool isExist =
           std::any_of(cfgRef.repos.begin(), cfgRef.repos.end(), [&alias](const auto &repo) {
-              return repo.alias == alias;
+              return repo.alias.value_or(repo.name) == alias;
           });
         if (isExist) {
             this->printer.printErr(
               LINGLONG_ERRV(QString{ "repo " } + alias.c_str() + " already exist."));
             return -1;
         }
+        auto minPriority = linglong::repo::getRepoMinPriority(cfgRef);
         cfgRef.repos.push_back(api::types::v1::Repo{
           .alias = options.repoOptions.repoAlias,
           .name = name,
+          .priority = minPriority - 100,
           .url = url,
         });
         return this->setRepoConfig(utils::serialize::toQVariantMap(cfgRef));
@@ -1913,11 +1927,32 @@ int Cli::repo(CLI::App *app)
 
     if (argsParseFunc("set-default")) {
         if (cfgRef.defaultRepo != alias) {
+            auto maxPriority = linglong::repo::getRepoMaxPriority(cfgRef);
             cfgRef.defaultRepo = alias;
+            for (auto &repo : cfgRef.repos) {
+                if (repo.alias.value_or(repo.name) == alias) {
+                    repo.priority = maxPriority + 100;
+                    break;
+                }
+            }
             return this->setRepoConfig(utils::serialize::toQVariantMap(cfgRef));
         }
 
         return 0;
+    }
+
+    if (argsParseFunc("set-priority")) {
+        auto isExist =
+          std::any_of(cfgRef.repos.begin(), cfgRef.repos.end(), [this](const auto &repo) {
+              return repo.priority == this->options.repoOptions.repoPriority;
+          });
+        if (isExist) {
+            this->printer.printErr(LINGLONG_ERRV(
+              QString("priority %1 already exist.").arg(this->options.repoOptions.repoPriority)));
+            return -1;
+        }
+        existingRepo->priority = options.repoOptions.repoPriority;
+        return this->setRepoConfig(utils::serialize::toQVariantMap(cfgRef));
     }
 
     this->printer.printErr(LINGLONG_ERRV("unknown operation"));

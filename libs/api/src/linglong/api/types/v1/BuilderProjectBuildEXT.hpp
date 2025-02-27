@@ -9,7 +9,7 @@
 //
 //  Then include this file, and then do
 //
-//     Repo.hpp data = nlohmann::json::parse(jsonString);
+//     BuilderProjectBuildEXT.hpp data = nlohmann::json::parse(jsonString);
 
 #pragma once
 
@@ -17,36 +17,26 @@
 #include <nlohmann/json.hpp>
 #include "linglong/api/types/v1/helper.hpp"
 
+#include "linglong/api/types/v1/Apt.hpp"
+
 namespace linglong {
 namespace api {
 namespace types {
 namespace v1 {
 /**
-* Configuration for a single repository.
+* build extension for builder project
 */
 
 using nlohmann::json;
 
 /**
-* Configuration for a single repository.
+* build extension for builder project
 */
-struct Repo {
+struct BuilderProjectBuildEXT {
 /**
-* alias of repo name
+* build extension for apt
 */
-std::optional<std::string> alias;
-/**
-* repo name
-*/
-std::string name;
-/**
-* priority of repo
-*/
-int64_t priority;
-/**
-* repo url
-*/
-std::string url;
+std::optional<Apt> apt;
 };
 }
 }
