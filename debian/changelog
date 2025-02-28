@@ -1,3 +1,16 @@
+linglong (1.7.8-1) unstable; urgency=medium
+
+  * feat: optimizing cli output
+  * fix: builder does not use the channel field of linglong.yaml
+  * refactor: optimize starting container
+  * fix: Dont't mapping the file under /home
+  * fix: rewrite file error
+  * fix: app can not start by laucher
+  * fix: enter command cannot enter the container
+  * fix: upgrade exception when all packages are up to date
+
+ -- dengbo <dengbo@deepin.org>  Fri, 28 Feb 2025 14:42:50 +0800
+
 linglong (1.5.6-1) unstable; urgency=medium
 
   * fix: layer size error when export layer repeatedly
