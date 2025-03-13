@@ -4,7 +4,7 @@ Release:        1
 Summary:        Linglong Package FrameWork
 License:        LGPLv3
 URL:            https://github.com/linuxdeepin/%{name}
-Source0:        %{url}/archive/%{version}/linglong-%{version}.tar.gz
+Source0:        %{url}/archive/%{version}/linglong-%{version}.tar
 
 BuildRequires:  cmake gcc-c++
 BuildRequires:  qt5-qtbase-devel qt5-qtbase-private-devel
@@ -100,6 +100,7 @@ cd build
 %{_datadir}/%{name}/config.yaml
 %{_datadir}/mime/packages/*
 %{_datadir}/locale/*
+%{_datadir}/applications/*
 
 %files -n linglong-builder
 %license LICENSE
