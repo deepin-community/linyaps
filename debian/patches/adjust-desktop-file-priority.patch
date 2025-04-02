@@ -1,0 +1,74 @@
+Index: linyaps/libs/linglong/src/linglong/repo/ostree_repo.cpp
+===================================================================
+--- linyaps.orig/libs/linglong/src/linglong/repo/ostree_repo.cpp
++++ linyaps/libs/linglong/src/linglong/repo/ostree_repo.cpp
+@@ -1847,6 +1847,10 @@ OSTreeRepo::exportEntries(const std::fil
+     for (const auto &path : exportPaths) {
+         auto source = appEntriesDir / path;
+         auto destination = rootEntriesDir / path;
++        // 将desktop安装到 entries/linglong/share/application下面
++        if (path == "share/applications") {
++            destination = rootEntriesDir / "linglong" / path;
++        }
+         // 将 share/systemd 目录下的文件导出到 lib/systemd 目录下
+         if (path == "share/systemd/user") {
+             destination = rootEntriesDir / "lib/systemd/user";
+@@ -1949,6 +1953,8 @@ void OSTreeRepo::updateSharedInfo() noex
+     LINGLONG_TRACE("update shared info");
+ 
+     auto applicationDir = QDir(this->repoDir.absoluteFilePath("entries/share/applications"));
++    auto newApplicationDir =
++          QDir(this->repoDir.absoluteFilePath("entries/linglong/share/applications"));
+     auto mimeDataDir = QDir(this->repoDir.absoluteFilePath("entries/share/mime"));
+     auto glibSchemasDir = QDir(this->repoDir.absoluteFilePath("entries/share/glib-2.0/schemas"));
+     // 更新 desktop database
+@@ -1960,6 +1966,15 @@ void OSTreeRepo::updateSharedInfo() noex
+                 + applicationDir.absolutePath() + ": " + ret.error().message();
+         }
+     }
++    
++    if (newApplicationDir.exists()) {
++        auto ret =
++          utils::command::Exec("update-desktop-database", { newApplicationDir.absolutePath() });
++        if (!ret) {
++            qWarning() << "warning: failed to update desktop database in "
++                + newApplicationDir.absolutePath() + ": " + ret.error().message();
++        }
++    }
+ 
+     // 更新 mime type database
+     if (mimeDataDir.exists()) {
+Index: linyaps/misc/lib/linglong/generate-xdg-data-dirs.sh
+===================================================================
+--- linyaps.orig/misc/lib/linglong/generate-xdg-data-dirs.sh
++++ linyaps/misc/lib/linglong/generate-xdg-data-dirs.sh
+@@ -13,10 +13,24 @@
+ LINGLONG_ROOT="@LINGLONG_ROOT@"
+ 
+ LINGLONG_DATA_DIR=${LINGLONG_ROOT}/entries/share
+-case ":$XDG_DATA_DIRS:" in
+-*":$LINGLONG_DATA_DIR:"*) : ;;
+-*":$LINGLONG_DATA_DIR/:"*) : ;;
+-*)
+-        XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}:${LINGLONG_DATA_DIR}"
++LINGLONG_DATA_DIR_DESKTOP=${LINGLONG_ROOT}/entries/linglong/share
++
++# 初始化默认值（不覆盖已有值）
++: "${XDG_DATA_DIRS:=/usr/local/share:/usr/share}"
++
++# 检查是否需要添加 LINGLONG_DATA_DIR_DESKTOP
++case ":${XDG_DATA_DIRS}:" in
++    *":${LINGLONG_DATA_DIR_DESKTOP}:"* | *":${LINGLONG_DATA_DIR_DESKTOP}/:"*) ;;
++    *)
++        # 在 /usr/local/share 后插入（兼容末尾斜杠）
++        XDG_DATA_DIRS=$(echo "$XDG_DATA_DIRS" | sed -E "s@(/usr/local/share/?)(:|$)@\1:$LINGLONG_DATA_DIR_DESKTOP\2@g")
++        ;;
++esac
++
++# 检查是否需要添加 LINGLONG_DATA_DIR
++case ":${XDG_DATA_DIRS}:" in
++    *":${LINGLONG_DATA_DIR}:"* | *":${LINGLONG_DATA_DIR}/:"*) ;;
++    *)
++        XDG_DATA_DIRS="${XDG_DATA_DIRS}:${LINGLONG_DATA_DIR}"
+         ;;
+ esac
