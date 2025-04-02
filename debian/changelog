@@ -1,3 +1,14 @@
+linglong (1.8.0-1) unstable; urgency=medium
+
+  * feat: support don't export the develop module
+  * feat: add share/templates dir to whitelist
+  * fix: failed to umount layer dir
+  * fix: ll-builder build failed
+  * fix: version comparison error
+  * fix: fix unshare error
+
+ -- dengbo <dengbo@deepin.org>  Wed, 02 Apr 2025 16:57:23 +0800
+
 linglong (1.7.11-1) unstable; urgency=medium
 
   * fix: empty directory exists after app uninstall.
