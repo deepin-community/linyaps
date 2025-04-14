@@ -31,11 +31,6 @@ Requires:       linglong-box = %{version}-%{release} linglong-bin = %{version}-%
 %description    -n linglong-builder
 This package is a tool that makes it easy to build applications and dependencies.
 
-%package        -n linglong-box
-Summary:        Linglong sandbox
-%description    -n linglong-box
-Linglong sandbox with OCI standard.
-
 %prep
 %autosetup -p1 -n linglong-%{version}
 
@@ -117,10 +112,6 @@ cd build
 %{_datadir}/bash-completion/completions/ll-builder
 %{_datadir}/%{name}/builder/templates/*.yaml
 %{_datadir}/%{name}/builder/uab/*
-
-%files -n linglong-box
-%license LICENSE
-%{_bindir}/ll-box
 
 %changelog
 * Thu Apr 25 2024 chenhuixing <chenhuixing@deepin.org> - 1.4.3-1
