@@ -1,29 +1,10 @@
 #!/usr/bin/make -f
 include /usr/share/dpkg/pkg-info.mk
 
-OS=$(shell awk '/^NAME=/' /etc/os-release | sed 's/NAME=//' | sed 's/\"//g' | tr '[:upper:]' '[:lower:]')
-OS_VERSION=$(shell awk '/VERSION=/' /etc/os-release | sed 's/VERSION=//' | sed 's/\"//g' | sed 's/[.]0/./')
-ARCH=$(shell dpkg-architecture -qDEB_TARGET_MULTIARCH)
-ENABLE_UAB_SUPPORT=FALSE
-
-ifeq ($(OS), deepin)
-ENABLE_UAB_SUPPORT=TRUE
-endif
-
 %:
 	dh $@ --buildsystem=cmake
 
-override_dh_auto_install:
-	dh_auto_install
-ifeq ($(ENABLE_UAB_SUPPORT), TRUE)
-	install -d debian/linglong-builder/usr/lib/$(ARCH)/linglong/builder/uab
-	dh_install -p linglong-builder usr/lib/$(ARCH)/linglong/builder/uab/ usr/lib/$(ARCH)/linglong/builder/
-endif
-
 EXTRA_OPTION = -DCPM_LOCAL_PACKAGES_ONLY=ON -DLINGLONG_VERSION=$(DEB_VERSION_UPSTREAM) -DENABLE_LINGLONG_INSTALLER=ON
-ifeq ($(ENABLE_UAB_SUPPORT), TRUE)
-EXTRA_OPTION += -DENABLE_UAB=ON
-endif
 
 override_dh_auto_configure:
 	dh_auto_configure --  ${EXTRA_OPTION}  ${DH_AUTO_ARGS}

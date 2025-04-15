@@ -10,9 +10,9 @@ Source0:        %{url}/archive/%{version}/linglong-%{version}.tar
 BuildRequires:  cmake gcc-c++
 BuildRequires:  qt5-qtbase-devel qt5-qtbase-private-devel
 BuildRequires:  glib2-devel nlohmann-json-devel ostree-devel yaml-cpp-devel
-BuildRequires:  systemd-devel gtest-devel libseccomp-devel elfutils-libelf-devel
+BuildRequires:  systemd-devel gtest-devel elfutils-libelf-devel
 BuildRequires:  glibc-static libstdc++-static
-BuildRequires:  libcurl-devel openssl-devel libcap-devel
+BuildRequires:  libcurl-devel openssl-devel
 BuildRequires:  gtest-devel gmock-devel
 Requires:       linglong-bin = %{version}-%{release}
 
@@ -88,6 +88,7 @@ cd build
 %{_libexecdir}/%{name}/ld-cache-generator
 %{_libexecdir}/%{name}/font-cache-generator
 %{_libexecdir}/%{name}/ll-dialog
+%{_libexecdir}/%{name}/dumb-init
 %{_libexecdir}/%{name}/dialog/99-linglong-permission
 %{_datadir}/bash-completion/completions/ll-cli
 %{_datadir}/zsh/vendor-completions/_ll-cli
