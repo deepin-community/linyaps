@@ -1,2 +1,1 @@
-linglong-bin: embedded-library
-linglong-bin: statically-linked-binary
+linglong-bin: statically-linked-binary usr/libexec/linglong/dumb-init
