@@ -1,3 +1,11 @@
+linglong (1.8.1-1) unstable; urgency=medium
+
+  * fix: merge runtime module also
+  * fix: avoid gio start thread before unshare
+  * fix: unable to start the app normally when switching accounts
+
+ -- dengbo <dengbo@deepin.org>  Thu, 17 Apr 2025 15:56:21 +0800
+
 linglong (1.8.0-1) unstable; urgency=medium
 
   * feat: support don't export the develop module
