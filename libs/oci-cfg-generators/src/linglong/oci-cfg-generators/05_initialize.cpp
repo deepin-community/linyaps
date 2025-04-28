@@ -7,6 +7,8 @@
 #include <filesystem>
 #include <iostream>
 
+#include <unistd.h>
+
 namespace linglong::generator {
 
 bool Initialize::generate(ocppi::runtime::config::types::Config &config) const noexcept
@@ -60,12 +62,17 @@ bool Initialize::generate(ocppi::runtime::config::types::Config &config) const n
     }
 
     std::srand(std::time(0));
-    auto tmpDir =
-      std::filesystem::temp_directory_path() / ("linglong_tmp_" + std::to_string(std::rand()));
-    std::filesystem::create_directory(tmpDir.string());
+    auto tmpPath = std::filesystem::temp_directory_path()
+      / ("linglong_" + std::to_string(::getuid()))
+      / (appID->second + "-" + std::to_string(std::rand()));
+    std::error_code ec;
+    if (!std::filesystem::create_directories(tmpPath, ec) && ec) {
+        std::cerr << tmpPath.string() + "can't be created";
+        return false;
+    }
     mounts.push_back(ocppi::runtime::config::types::Mount{ .destination = "/tmp",
                                                            .options = string_list{ "rbind", "rw" },
-                                                           .source = tmpDir,
+                                                           .source = tmpPath,
                                                            .type = "bind" });
 
     config.mounts = std::move(mounts);
