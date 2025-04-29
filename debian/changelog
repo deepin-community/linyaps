@@ -1,3 +1,9 @@
+linglong (1.8.2-1) unstable; urgency=medium
+
+  * release 1.8.2-1.
+
+ -- dengbo <dengbo@deepin.org>  Tue, 29 Apr 2025 17:57:53 +0800
+
 linglong (1.8.1-1) unstable; urgency=medium
 
   * fix: merge runtime module also
