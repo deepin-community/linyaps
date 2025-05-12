@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: 2025 UnionTech Software Technology Co., Ltd.
+#
+# SPDX-License-Identifier: LGPL-3.0-or-later
+
+# This systemd service is used to preload Dtk and Qt libraries into the page cache,
+# so some linyaps applications that use these libraries will start faster on their first launch
+
+[Unit]
+Description=Linyaps application preloader
+After=graphical-session.target
+PartOf=graphical-session.target
+BindsTo=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/bin/sleep 30s
+ExecStart=ll-cli run cn.org.linyaps.preloader
+Slice=app.slice
+RemainAfterExit=yes
+
+[Install]
+WantedBy=graphical-session.target
