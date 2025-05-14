@@ -297,7 +297,7 @@ You can report bugs to the linyaps team under this project: https://github.com/O
     buildExport
       ->add_option("-z, --compressor",
                    ExportOption.compressor,
-                   "supported compressors are: lz4(uab default), lzam(layer default), zstd")
+                   "supported compressors are: lz4(default), lzma, zstd")
       ->type_name("X");
     auto *iconOpt =
       buildExport->add_option("--icon", ExportOption.iconPath, _("Uab icon (optional)"))
