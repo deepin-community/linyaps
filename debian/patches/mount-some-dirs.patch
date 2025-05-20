@@ -2,13 +2,14 @@ Index: linyaps/libs/oci-cfg-generators/src/linglong/oci-cfg-generators/90_legacy
 ===================================================================
 --- linyaps.orig/libs/oci-cfg-generators/src/linglong/oci-cfg-generators/90_legacy.cpp
 +++ linyaps/libs/oci-cfg-generators/src/linglong/oci-cfg-generators/90_legacy.cpp
-@@ -63,6 +63,9 @@ bool Legacy::generate(ocppi::runtime::co
+@@ -63,6 +63,10 @@ bool Legacy::generate(ocppi::runtime::co
          { "/usr/share/icons", "/usr/share/icons" },
          { "/usr/share/zoneinfo", "/usr/share/zoneinfo" },
          { "/etc/resolvconf", "/etc/resolvconf" },
 +        { "/usr/share/wallpapers", "/usr/share/wallpapers" },
 +        { "/usr/share/music", "/usr/share/music" },
 +        { "/usr/share/extensions-from-app-store", "/usr/share/extensions-from-app-store" },
++        { "/usr/share/dsg", "/usr/share/dsg" }
      };
  
      std::error_code ec;
