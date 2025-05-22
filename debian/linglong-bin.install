@@ -8,7 +8,6 @@ usr/lib/systemd/system-environment-generators/61-linglong
 usr/lib/systemd/user-generators/linglong-user-systemd-generator
 usr/lib/systemd/system/org.deepin.linglong.PackageManager.service lib/systemd/system/
 usr/lib/systemd/user/linglong-session-helper.service
-usr/lib/systemd/user/cn.org.linyaps.preloader.service
 usr/lib/sysusers.d/linglong.conf
 usr/lib/tmpfiles.d/linglong.conf
 usr/libexec/linglong/ll-package-manager

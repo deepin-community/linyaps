@@ -28,7 +28,6 @@ if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-decon
                 done
                 for instance in $instances; do
                         systemctl --user --machine="$instance"@ restart linglong-session-helper.service >/dev/null || true
-                        systemctl --global --machine="${instance}"@ enable cn.org.linyaps.preloader.service > /dev/null || true
                 done
         fi
 fi

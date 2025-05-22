@@ -43,7 +43,6 @@ configure_files(
   lib/systemd/system-preset/91-linglong.preset
   lib/systemd/user-generators/linglong-user-systemd-generator
   lib/systemd/user/linglong-session-helper.service
-  lib/systemd/user/cn.org.linyaps.preloader.service
   lib/sysusers.d/linglong.conf
   lib/tmpfiles.d/linglong.conf
   script/linglong.sh
