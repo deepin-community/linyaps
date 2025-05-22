@@ -1,0 +1,63 @@
+Index: linyaps/debian/linglong-bin.install
+===================================================================
+--- linyaps.orig/debian/linglong-bin.install
++++ linyaps/debian/linglong-bin.install
+@@ -8,6 +8,7 @@ usr/lib/systemd/system-environment-gener
+ usr/lib/systemd/user-generators/linglong-user-systemd-generator
+ usr/lib/systemd/system/org.deepin.linglong.PackageManager.service lib/systemd/system/
+ usr/lib/systemd/user/linglong-session-helper.service
++usr/lib/systemd/user/cn.org.linyaps.preloader.service
+ usr/lib/sysusers.d/linglong.conf
+ usr/lib/tmpfiles.d/linglong.conf
+ usr/libexec/linglong/ll-package-manager
+Index: linyaps/debian/linglong-bin.postinst
+===================================================================
+--- linyaps.orig/debian/linglong-bin.postinst
++++ linyaps/debian/linglong-bin.postinst
+@@ -28,6 +28,7 @@ if [ "$1" = "configure" ] || [ "$1" = "a
+                 done
+                 for instance in $instances; do
+                         systemctl --user --machine="$instance"@ restart linglong-session-helper.service >/dev/null || true
++                        systemctl --global --machine="${instance}"@ enable cn.org.linyaps.preloader.service > /dev/null || true
+                 done
+         fi
+ fi
+Index: linyaps/misc/CMakeLists.txt
+===================================================================
+--- linyaps.orig/misc/CMakeLists.txt
++++ linyaps/misc/CMakeLists.txt
+@@ -43,6 +43,7 @@ configure_files(
+   lib/systemd/system-preset/91-linglong.preset
+   lib/systemd/user-generators/linglong-user-systemd-generator
+   lib/systemd/user/linglong-session-helper.service
++  lib/systemd/user/cn.org.linyaps.preloader.service
+   lib/sysusers.d/linglong.conf
+   lib/tmpfiles.d/linglong.conf
+   script/linglong.sh
+Index: linyaps/misc/lib/systemd/user/cn.org.linyaps.preloader.service
+===================================================================
+--- /dev/null
++++ linyaps/misc/lib/systemd/user/cn.org.linyaps.preloader.service
+@@ -0,0 +1,22 @@
++# SPDX-FileCopyrightText: 2025 UnionTech Software Technology Co., Ltd.
++#
++# SPDX-License-Identifier: LGPL-3.0-or-later
++
++# This systemd service is used to preload Dtk and Qt libraries into the page cache,
++# so some linyaps applications that use these libraries will start faster on their first launch
++
++[Unit]
++Description=Linyaps application preloader
++After=graphical-session.target
++PartOf=graphical-session.target
++BindsTo=graphical-session.target
++
++[Service]
++Type=oneshot
++ExecStartPre=/usr/bin/sleep 30s
++ExecStart=ll-cli run cn.org.linyaps.preloader
++Slice=app.slice
++RemainAfterExit=yes
++
++[Install]
++WantedBy=graphical-session.target
