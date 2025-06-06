@@ -1,3 +1,13 @@
+linglong (1.8.4-1) unstable; urgency=medium
+
+  * feat: handle missing refs gracefully in removeOstreeRef.
+  * fix: update task ends abnormally when there is an application running.
+  * fix: uninstall application exception output log.
+  * feat: add /etc/hosts to old generators.
+  * feat: add hooks features.
+
+ -- dengbo <dengbo@deepin.org>  Fri, 06 Jun 2025 17:46:38 +0800
+
 linglong (1.8.3-1) unstable; urgency=medium
 
   * fix: restrict content command to app type layers only
