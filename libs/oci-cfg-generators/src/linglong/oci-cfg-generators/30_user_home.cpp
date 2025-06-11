@@ -60,14 +60,13 @@ bool UserHome::generate(ocppi::runtime::config::types::Config &config) const noe
     auto env = process.env.value_or(std::vector<std::string>{});
 
     auto *homeEnv = ::getenv("HOME");
-    auto *userNameEnv = ::getenv("USER");
-    if (homeEnv == nullptr || userNameEnv == nullptr) {
+    if (homeEnv == nullptr) {
         std::cerr << "Couldn't get HOME or USER from env." << std::endl;
         return false;
     }
 
     auto hostHomeDir = std::filesystem::path(homeEnv);
-    auto cognitiveHomeDir = std::filesystem::path{ "/home" } / userNameEnv;
+    auto cognitiveHomeDir = hostHomeDir;
     if (!std::filesystem::exists(hostHomeDir)) {
         std::cerr << "Home " << hostHomeDir << "doesn't exists." << std::endl;
         return false;
