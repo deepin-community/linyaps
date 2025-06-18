@@ -1,3 +1,9 @@
+linglong (1.9.0-1) unstable; urgency=medium
+
+  * release 1.9.0-1.
+
+ -- dengbo <dengbo@deepin.org>  Wed, 18 Jun 2025 18:13:20 +0800
+
 linglong (1.8.0-1) unstable; urgency=medium
 
   * feat: support don't export the develop module
