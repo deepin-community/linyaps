@@ -2,7 +2,7 @@ Index: linyaps/libs/oci-cfg-generators/src/linglong/oci-cfg-generators/container
 ===================================================================
 --- linyaps.orig/libs/oci-cfg-generators/src/linglong/oci-cfg-generators/container_cfg_builder.cpp
 +++ linyaps/libs/oci-cfg-generators/src/linglong/oci-cfg-generators/container_cfg_builder.cpp
-@@ -368,7 +368,10 @@ ContainerCfgBuilder &ContainerCfgBuilder
+@@ -368,7 +368,11 @@ ContainerCfgBuilder &ContainerCfgBuilder
          "/etc/localtime",
          "/etc/resolv.conf",
          "/etc/timezone",
@@ -10,7 +10,8 @@ Index: linyaps/libs/oci-cfg-generators/src/linglong/oci-cfg-generators/container
 +        "/etc/hosts",
 +        "/usr/share/wallpapers",
 +        "/usr/share/music",
-+        "/usr/share/extensions-from-app-store"
++        "/usr/share/extensions-from-app-store",
++        "/usr/share/dsg"
      };
  
      hostStaticsMount = std::vector<Mount>{};
