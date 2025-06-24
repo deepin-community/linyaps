@@ -1,3 +1,4 @@
+add-fix-localtime.patch
 add-mount-dirs.patch
 deepin-specifies-export-directory.patch
 add-linyaps-preloader.patch
