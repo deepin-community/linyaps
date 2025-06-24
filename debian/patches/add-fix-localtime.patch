@@ -1,0 +1,36 @@
+Index: linyaps/misc/CMakeLists.txt
+===================================================================
+--- linyaps.orig/misc/CMakeLists.txt
++++ linyaps/misc/CMakeLists.txt
+@@ -27,6 +27,7 @@ configure_files(
+   libexec/linglong/ld-cache-generator
+   lib/linglong/container/README.md
+   lib/linglong/generate-xdg-data-dirs.sh
++  lib/linglong/container/config.d/90-fix-localtime
+   lib/systemd/system-environment-generators/61-linglong
+   lib/systemd/system/org.deepin.linglong.PackageManager.service
+   lib/systemd/system-preset/91-linglong.preset
+@@ -104,6 +105,11 @@ install(
+ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/lib/linglong/container/README.md
+         DESTINATION ${CMAKE_INSTALL_PREFIX}/lib/linglong/container)
+ 
++install(
++  PROGRAMS
++    ${CMAKE_CURRENT_BINARY_DIR}/lib/linglong/container/config.d/90-fix-localtime
++  DESTINATION ${CMAKE_INSTALL_PREFIX}/lib/linglong/container/config.d)
++
+ # linglong default configuration
+ install(FILES ${CMAKE_CURRENT_LIST_DIR}/share/linglong/config.yaml
+         DESTINATION ${CMAKE_INSTALL_PREFIX}/share/linglong)
+Index: linyaps/misc/lib/linglong/container/config.d/90-fix-localtime
+===================================================================
+--- /dev/null
++++ linyaps/misc/lib/linglong/container/config.d/90-fix-localtime
+@@ -0,0 +1,7 @@
++#! /bin/bash
++
++touch /tmp/linglong_fix_localtime || true
++
++cat - | jq '
++    ((.mounts[] | select(.destination=="/etc/localtime") | .options) |= ["copy-symlink"])
++    | .mounts += [{"destination": "/etc/linglong_fix_localtime", "source": "/tmp/linglong_fix_localtime", "type": "bind", "options": ["rbind"]}]'
