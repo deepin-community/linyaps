@@ -1,3 +1,10 @@
+linglong (1.9.5-1) unstable; urgency=medium
+
+  * fix: treat /etc/localtime as fixed mount node.
+  * refactor: simplify environment variable handling in systemd generator.
+
+ -- dengbo <dengbo@deepin.org>  Tue, 08 Jul 2025 14:58:14 +0800
+
 linglong (1.9.4-1) unstable; urgency=medium
 
   * release 1.9.4-1.
