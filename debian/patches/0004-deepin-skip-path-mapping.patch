@@ -1,0 +1,25 @@
+Index: linyaps/libs/linglong/src/linglong/cli/cli.cpp
+===================================================================
+--- linyaps.orig/libs/linglong/src/linglong/cli/cli.cpp
++++ linyaps/libs/linglong/src/linglong/cli/cli.cpp
+@@ -2207,9 +2207,17 @@ int Cli::content([[maybe_unused]] CLI::A
+         qCritical() << "failed to check symlink " << file.c_str() << ":" << ec.message().c_str();
+     }
+ 
+-    // Dont't mapping the file under /home
+-    if (auto tmp = target.string(); tmp.rfind("/home/", 0) == 0) {
+-        return target;
++    //Do not mapping files in the following directories, which have been mounted into the container
++    std::vector<std::string> skipMappingPaths{ "/home/",
++                                               "/media/",
++                                               "/usr/share/icons/",
++                                               "/usr/share/fonts/",
++                                               "/usr/share/wallpapers/",
++                                               "/usr/share/themes/" };
++    for (const auto &path : skipMappingPaths) {
++        if (auto tmp = target.string(); tmp.rfind(path, 0) == 0) {
++            return target;
++        }
+     }
+ 
+     return std::filesystem::path{ "/run/host/rootfs" }
