@@ -9,6 +9,9 @@ EXTRA_OPTION = -DCPM_LOCAL_PACKAGES_ONLY=ON -DLINGLONG_VERSION=$(DEB_VERSION_UPS
 override_dh_auto_configure:
 	dh_auto_configure --  ${EXTRA_OPTION}  ${DH_AUTO_ARGS}
 
+override_dh_strip:
+    dh_strip --no-dwz
+
 # https://sources.debian.org/src/amavisd-new/1:2.13.0-3/debian/rules/?hl=10#L10
 execute_after_dh_installinit:
 	dh_installsysusers # this is needed until dh compat 14
