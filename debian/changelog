@@ -1,3 +1,9 @@
+linglong (1.9.7-1) unstable; urgency=medium
+
+  * release 1.9.7-1.
+
+ -- dengbo <dengbo@deepin.org>  Wed, 16 Jul 2025 15:59:08 +0800
+
 linglong (1.9.6-1) unstable; urgency=medium
 
   * feat: Add patch to extends path skipping for container mapping.
