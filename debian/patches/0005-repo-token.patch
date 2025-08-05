@@ -1,8 +1,8 @@
-Index: linglong/libs/linglong/src/linglong/repo/ostree_repo.cpp
+Index: linyaps/libs/linglong/src/linglong/repo/ostree_repo.cpp
 ===================================================================
---- linglong.orig/libs/linglong/src/linglong/repo/ostree_repo.cpp
-+++ linglong/libs/linglong/src/linglong/repo/ostree_repo.cpp
-@@ -1270,6 +1270,20 @@ utils::error::Result<void> OSTreeRepo::p
+--- linyaps.orig/libs/linglong/src/linglong/repo/ostree_repo.cpp
++++ linyaps/libs/linglong/src/linglong/repo/ostree_repo.cpp
+@@ -1271,6 +1271,21 @@ utils::error::Result<void> OSTreeRepo::p
      return LINGLONG_OK;
  }
  
@@ -10,10 +10,11 @@ Index: linglong/libs/linglong/src/linglong/repo/ostree_repo.cpp
 +utils::error::Result<std::string> getAptToken() noexcept
 +{
 +    LINGLONG_TRACE("get apt token");
-+    auto aptToken = utils::command::Exec("sh", {
-+    "-c",
-+    "eval `apt-config shell Token Acquire::SmartMirrors::Token`; echo $Token",
++    auto aptToken = utils::command::Cmd("sh").exec({
++      "-c",
++      "eval `apt-config shell Token Acquire::SmartMirrors::Token`; echo $Token",
 +    });
++
 +    if (!aptToken) {
 +        return LINGLONG_ERR(aptToken);
 +    }
@@ -23,7 +24,7 @@ Index: linglong/libs/linglong/src/linglong/repo/ostree_repo.cpp
  // 初始化一个GVariantBuilder
  GVariantBuilder OSTreeRepo::initOStreePullOptions(const std::string &ref) noexcept
  {
-@@ -1290,6 +1304,18 @@ GVariantBuilder OSTreeRepo::initOStreePu
+@@ -1291,6 +1306,18 @@ GVariantBuilder OSTreeRepo::initOStreePu
                            "{s@v}",
                            "refs",
                            g_variant_new_variant(g_variant_new_strv(refs.data(), -1)));
