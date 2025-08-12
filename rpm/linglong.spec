@@ -102,6 +102,7 @@ cd build
 %{_datadir}/mime/packages/*
 %{_datadir}/locale/*
 %{_datadir}/applications/*
+%{_datadir}/icons/*
 
 %files -n linglong-builder
 %license LICENSE
