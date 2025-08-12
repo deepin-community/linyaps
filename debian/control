@@ -4,7 +4,6 @@ Priority: optional
 Maintainer: Deepin Packages Builder <packages@deepin.com>
 Build-Depends: cmake,
                debhelper-compat (= 12),
-               erofsfuse,
                intltool,
                libcli11-dev (>= 2.4.1) | hello,
                libcurl4-openssl-dev,
@@ -40,6 +39,8 @@ Depends: desktop-file-utils,
          libglib2.0-bin,
          linglong-box | crun,
          shared-mime-info,
+         pkexec,
+         erofs-utils,
          ${misc:Depends},
          ${shlibs:Depends}
 Replaces: linglong-dbus-proxy
@@ -50,13 +51,13 @@ Description: Linglong package manager.
 Package: linglong-builder
 Architecture: any
 Depends: erofs-utils,
-         erofsfuse,
          fuse-overlayfs,
          git,
          linglong-bin,
          linglong-box | crun,
          ${misc:Depends},
          ${shlibs:Depends}
-Recommends: devscripts, linglong-loader
+Recommends: linglong-loader
+Suggests: devscripts
 Description: Linglong application building tools.
  ll-builder is a tool that makes it easy to build applications and dependencies.

@@ -22,12 +22,14 @@ This package is a linglong package framework.
 %package        -n linglong-bin
 Summary:        Linglong package manager
 Requires:       linglong-box
+Requires:       pkexec erofs-utils erofsfuse
 %description    -n linglong-bin
 Linglong package management command line tool.
 
 %package        -n linglong-builder
 Summary:        Linglong build tools
 Requires:       linglong-box linglong-bin = %{version}-%{release}
+Requires:       erofs-utils fuse-overlayfs git
 %description    -n linglong-builder
 This package is a tool that makes it easy to build applications and dependencies.
 
