@@ -1,3 +1,13 @@
+linglong (1.9.13-1) unstable; urgency=medium
+
+  * fix: fix env is cleared by `env -i`.
+  * refactor: simplify container entrypoint generation.
+  * feat: enable git submodule fetching with environment variable control.
+  * feat: add mirror enable/disable functionality for repositories.
+  * feat: add no-clean-objects option for remove command.
+
+ -- dengbo <dengbo@deepin.org>  Fri, 19 Sep 2025 16:03:17 +0800
+
 linglong (1.9.12-1) unstable; urgency=medium
 
   * release 1.9.12-1.
