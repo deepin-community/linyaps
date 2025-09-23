@@ -14,6 +14,7 @@ BuildRequires:  systemd-devel gtest-devel elfutils-libelf-devel
 BuildRequires:  glibc-static libstdc++-static
 BuildRequires:  libcurl-devel openssl-devel
 BuildRequires:  gtest-devel gmock-devel
+BuildRequires:  libcap-devel
 Requires:       linglong-bin = %{version}-%{release}
 
 %description
@@ -23,6 +24,7 @@ This package is a linglong package framework.
 Summary:        Linglong package manager
 Requires:       linglong-box
 Requires:       pkexec erofs-utils
+Requires:       uidmap
 Recommends:     erofsfuse
 %description    -n linglong-bin
 Linglong package management command line tool.
