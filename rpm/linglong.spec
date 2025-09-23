@@ -14,6 +14,7 @@ BuildRequires:  systemd-devel gtest-devel elfutils-libelf-devel
 BuildRequires:  glibc-static libstdc++-static
 BuildRequires:  libcurl-devel openssl-devel
 BuildRequires:  gtest-devel gmock-devel
+BuildRequires:  libcap-devel
 Requires:       linglong-bin = %{version}-%{release}
 
 %description
@@ -30,7 +31,7 @@ Linglong package management command line tool.
 %package        -n linglong-builder
 Summary:        Linglong build tools
 Requires:       linglong-box linglong-bin = %{version}-%{release}
-Requires:       erofs-utils fuse-overlayfs
+Requires:       erofs-utils fuse-overlayfs uidmap
 Recommends:     git
 %description    -n linglong-builder
 This package is a tool that makes it easy to build applications and dependencies.
