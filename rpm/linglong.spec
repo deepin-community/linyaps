@@ -13,8 +13,8 @@ BuildRequires:  glib2-devel nlohmann-json-devel ostree-devel yaml-cpp-devel
 BuildRequires:  systemd-devel gtest-devel elfutils-libelf-devel
 BuildRequires:  glibc-static libstdc++-static
 BuildRequires:  libcurl-devel openssl-devel
-BuildRequires:  gtest-devel gmock-devel
-BuildRequires:  libcap-devel
+BuildRequires:  gtest-devel gmock-devel erofs-utils
+BuildRequires:  libcap-devel gettext-devel
 Requires:       linglong-bin = %{version}-%{release}
 
 %description

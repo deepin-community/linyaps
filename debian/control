@@ -29,6 +29,8 @@ Build-Depends: cmake,
                qt6-base-private-dev | qtbase5-private-dev,
                systemd,
                zlib1g-dev,
+               gettext,
+               erofs-utils,
                libcap-dev
 Standards-Version: 4.1.3
 Homepage: http://www.deepin.org
