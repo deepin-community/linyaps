@@ -1,3 +1,9 @@
+linglong (1.10.1-1) unstable; urgency=medium
+
+  * release 1.10.1-1.
+
+ -- dengbo <dengbo@deepin.org>  Fri, 31 Oct 2025 13:16:07 +0800
+
 linglong (1.9.13-1) unstable; urgency=medium
 
   * fix: fix env is cleared by `env -i`.
