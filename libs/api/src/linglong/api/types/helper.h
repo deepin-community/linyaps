@@ -12,9 +12,11 @@ namespace linglong::api::types::v1 {
 
 // I added this size assertion because these structs overload == operator.
 // Adding new fields will make this fail, reminding me to update the == implementation.
+#ifndef __i386__
 static_assert(sizeof(struct Repo) == 120);
 static_assert(sizeof(struct RepoConfig) == 88);
 static_assert(sizeof(struct RepoConfigV2) == 64);
+#endif
 
 inline bool operator==(const Repo &cfg1, const Repo &cfg2) noexcept
 {
