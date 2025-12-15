@@ -1,3 +1,12 @@
+linglong (1.10.4-1) unstable; urgency=medium
+
+  * fix: replace unsafe temp-dir creation and fix fmt API usage.
+  * build: add hardend compile/link flags.
+  * fix: Processor character matching error.
+  * fix(api): drop 32-bit size assertions, keep 64-bit checks.
+
+ -- dengbo <dengbo@deepin.org>  Mon, 15 Dec 2025 16:16:42 +0800
+
 linglong (1.10.3-1) unstable; urgency=medium
 
   * release 1.10.3-1.
