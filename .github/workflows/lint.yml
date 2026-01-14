@@ -1,5 +1,4 @@
 name: lint
-
 on:
   pull_request:
     branches: ['master', 'release/**']
