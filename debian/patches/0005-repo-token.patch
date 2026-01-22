@@ -10,7 +10,7 @@ Index: linyaps/libs/linglong/src/linglong/repo/ostree_repo.cpp
 +utils::error::Result<std::string> getAptToken() noexcept
 +{
 +    LINGLONG_TRACE("get apt token");
-+    auto aptToken = utils::command::Cmd("sh").exec({
++    auto aptToken = linglong::utils::Cmd("sh").exec({
 +      "-c",
 +      "eval `apt-config shell Token Acquire::SmartMirrors::Token`; echo $Token",
 +    });
@@ -18,7 +18,7 @@ Index: linyaps/libs/linglong/src/linglong/repo/ostree_repo.cpp
 +    if (!aptToken) {
 +        return LINGLONG_ERR(aptToken);
 +    }
-+    return aptToken->toStdString();
++    return aptToken;
 +}
 +
  // 初始化一个GVariantBuilder
