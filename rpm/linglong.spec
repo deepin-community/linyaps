@@ -15,6 +15,7 @@ BuildRequires:  glibc-static libstdc++-static
 BuildRequires:  libcurl-devel openssl-devel
 BuildRequires:  gtest-devel gmock-devel erofs-utils
 BuildRequires:  libcap-devel gettext-devel
+BuildRequires:  libuuid-devel
 Requires:       linglong-bin = %{version}-%{release}
 
 %description
