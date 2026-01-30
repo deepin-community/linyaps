@@ -15,6 +15,7 @@ BuildRequires:  glibc-static libstdc++-static
 BuildRequires:  libcurl-devel openssl-devel
 BuildRequires:  gtest-devel gmock-devel erofs-utils
 BuildRequires:  libcap-devel gettext-devel
+BuildRequires:  libuuid-devel
 Requires:       linglong-bin = %{version}-%{release}
 
 %description
@@ -94,6 +95,7 @@ cd build
 %{_libexecdir}/%{name}/font-cache-generator
 %{_libexecdir}/%{name}/ll-dialog
 %{_libexecdir}/%{name}/ll-init
+%{_libexecdir}/%{name}/ll-driver-detect
 %{_libexecdir}/%{name}/dialog/99-linglong-permission
 %{_datadir}/bash-completion/completions/ll-cli
 %{_datadir}/zsh/vendor-completions/_ll-cli
