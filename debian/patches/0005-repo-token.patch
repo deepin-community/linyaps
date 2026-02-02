@@ -30,7 +30,7 @@ Index: linyaps/libs/linglong/src/linglong/repo/ostree_repo.cpp
                            g_variant_new_variant(g_variant_new_strv(refs.data(), -1)));
 +    auto token = getAptToken();
 +    if (!token) {
-+        qWarning() << "get apt token error: " << token.error().message();
++        LogW("get apt token error: {}", token.error().message());
 +    } else {
 +        GVariantBuilder hdr_builder;
 +        g_variant_builder_init(&hdr_builder, G_VARIANT_TYPE("a(ss)"));
