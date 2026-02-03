@@ -42,7 +42,8 @@ RuntimeLayer::RuntimeLayer(package::Reference ref, RunContext &context)
 RuntimeLayer::~RuntimeLayer()
 {
     if (temporary && layerDir) {
-        layerDir->removeRecursively();
+        std::error_code ec;
+        std::filesystem::remove_all(layerDir->path(), ec);
     }
 }
 
@@ -125,7 +126,7 @@ utils::error::Result<void> RunContext::resolve(const linglong::package::Referenc
     } else if (info.kind == "runtime") {
         runtimeLayer = std::move(layer).value();
     } else {
-        return LINGLONG_ERR("kind " + QString::fromStdString(info.kind) + " is not runnable");
+        return LINGLONG_ERR(fmt::format("kind {} is not runnable", info.kind));
     }
 
     // base layer must be resolved for all kinds
@@ -217,8 +218,7 @@ utils::error::Result<void> RunContext::resolve(const api::types::v1::BuilderProj
     } else if (target.package.kind == "runtime") {
         runtimeOutput = buildOutput;
     } else {
-        return LINGLONG_ERR("can't resolve run context from package kind "
-                            + QString::fromStdString(target.package.kind));
+        return LINGLONG_ERR("can't resolve run context from package kind " + target.package.kind);
     }
 
     auto baseFuzzyRef = package::FuzzyReference::parse(target.base);
@@ -324,7 +324,7 @@ utils::error::Result<void> RunContext::resolveLayer(bool depsBinaryOnly,
 
     for (auto &ext : extensionLayers) {
         if (!ext.resolveLayer()) {
-            qWarning() << "ignore failed extension layer";
+            LogW("ignore failed extension layer");
             continue;
         }
 
@@ -574,18 +574,18 @@ utils::error::Result<void> RunContext::fillContextCfg(
 
     auto bundleDir = runtime::makeBundleDir(containerID, bundleSuffix);
     if (!bundleDir) {
-        return LINGLONG_ERR("failed to get bundle dir of " + QString::fromStdString(containerID));
+        return LINGLONG_ERR("failed to get bundle dir of " + containerID);
     }
     bundle = *bundleDir;
     builder.setBundlePath(bundle);
 
-    builder.setBasePath(baseLayer->getLayerDir()->absoluteFilePath("files").toStdString());
+    builder.setBasePath(baseLayer->getLayerDir()->filesDirPath());
 
     if (appOutput) {
         builder.setAppPath(*appOutput, false);
     } else {
         if (appLayer) {
-            builder.setAppPath(appLayer->getLayerDir()->absoluteFilePath("files").toStdString());
+            builder.setAppPath(appLayer->getLayerDir()->filesDirPath());
         }
     }
 
@@ -593,8 +593,7 @@ utils::error::Result<void> RunContext::fillContextCfg(
         builder.setRuntimePath(*runtimeOutput, false);
     } else {
         if (runtimeLayer) {
-            builder.setRuntimePath(
-              runtimeLayer->getLayerDir()->absoluteFilePath("files").toStdString());
+            builder.setRuntimePath(runtimeLayer->getLayerDir()->filesDirPath());
         }
     }
 
@@ -632,7 +631,7 @@ utils::error::Result<void> RunContext::fillContextCfg(
           .destination = "/opt/extensions/" + name,
           .gidMappings = {},
           .options = { { "rbind", "ro" } },
-          .source = ext.getLayerDir()->absoluteFilePath("files").toStdString(),
+          .source = ext.getLayerDir()->filesDirPath(),
           .type = "bind",
           .uidMappings = {},
         });
@@ -792,8 +791,7 @@ utils::error::Result<std::filesystem::path> RunContext::getBaseLayerPath() const
         return LINGLONG_ERR("run context doesn't resolved");
     }
 
-    const auto &layerDir = baseLayer->getLayerDir();
-    return std::filesystem::path{ layerDir->absolutePath().toStdString() };
+    return baseLayer->getLayerDir()->path();
 }
 
 utils::error::Result<std::filesystem::path> RunContext::getRuntimeLayerPath() const
@@ -804,8 +802,7 @@ utils::error::Result<std::filesystem::path> RunContext::getRuntimeLayerPath() co
         return LINGLONG_ERR("no runtime layer exist");
     }
 
-    const auto &layerDir = runtimeLayer->getLayerDir();
-    return std::filesystem::path{ layerDir->absolutePath().toStdString() };
+    return runtimeLayer->getLayerDir()->path();
 }
 
 utils::error::Result<api::types::v1::RepositoryCacheLayersItem> RunContext::getCachedAppItem()

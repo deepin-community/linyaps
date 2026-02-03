@@ -14,6 +14,7 @@
 #include "linglong/api/types/v1/Repo.hpp"
 #include "linglong/api/types/v1/State.hpp"
 #include "linglong/common/error.h"
+#include "linglong/common/serialize/json.h"
 #include "linglong/common/strings.h"
 #include "linglong/extension/extension.h"
 #include "linglong/package/layer_file.h"
@@ -28,19 +29,16 @@
 #include "linglong/utils/finally/finally.h"
 #include "linglong/utils/hooks.h"
 #include "linglong/utils/log/log.h"
-#include "linglong/utils/packageinfo_handler.h"
 #include "linglong/utils/serialize/json.h"
+#include "linglong/utils/serialize/packageinfo_handler.h"
 #include "linglong/utils/transaction.h"
 
 #include <QDBusInterface>
 #include <QDBusReply>
 #include <QDBusUnixFileDescriptor>
-#include <QDebug>
 #include <QEventLoop>
-#include <QJsonArray>
 #include <QMetaObject>
 #include <QTimer>
-#include <QUuid>
 
 #include <algorithm>
 #include <cstdint>
@@ -59,7 +57,7 @@ QVariantMap toDBusReply(const utils::error::Result<T> &x, std::string type = "di
 {
     Q_ASSERT(!x.has_value());
 
-    return utils::serialize::toQVariantMap(
+    return common::serialize::toQVariantMap(
       api::types::v1::CommonResult{ .code = x.error().code(),       // NOLINT
                                     .message = x.error().message(), // NOLINT
                                     .type = std::move(type) });
@@ -69,7 +67,7 @@ QVariantMap toDBusReply(utils::error::ErrorCode code,
                         const std::string &message,
                         const std::string &type = "display") noexcept
 {
-    return utils::serialize::toQVariantMap(
+    return common::serialize::toQVariantMap(
       api::types::v1::CommonResult{ .code = static_cast<int>(code), // NOLINT
                                     .message = message,             // NOLINT
                                     .type = type });
@@ -106,15 +104,13 @@ PackageManager::PackageManager(linglong::repo::OSTreeRepo &repo,
         try {
             deferredTimeOut = std::stoi(deferredTimeOutEnv) * 1s;
         } catch (std::invalid_argument &e) {
-            qWarning() << "failed to parse LINGLONG_DEFERRED_TIMEOUT[" << deferredTimeOutEnv
-                       << "]:" << e.what();
+            LogW("failed to parse LINGLONG_DEFERRED_TIMEOUT[{}]: {}", deferredTimeOutEnv, e.what());
         } catch (std::out_of_range &e) {
-            qWarning() << "failed to parse LINGLONG_DEFERRED_TIMEOUT[" << deferredTimeOutEnv
-                       << "]:" << e.what();
+            LogW("failed to parse LINGLONG_DEFERRED_TIMEOUT[{}]: {}", deferredTimeOutEnv, e.what());
         }
     }
 
-    qInfo().nospace() << "deferredTimeOut:" << deferredTimeOut.count() << "s";
+    LogD("deferredTimeOut: {}s", deferredTimeOut.count());
 
     auto *timer = new QTimer(this);
     timer->setInterval(deferredTimeOut);
@@ -130,7 +126,7 @@ PackageManager::~PackageManager()
 {
     auto ret = unlockRepo();
     if (!ret) {
-        qCritical() << "failed to unlock repo:" << ret.error().message();
+        LogE("failed to unlock repo: {}", ret.error());
     }
 }
 
@@ -140,22 +136,19 @@ utils::error::Result<bool> PackageManager::isRefBusy(const package::Reference &r
 
     auto ret = lockRepo();
     if (!ret) {
-        return LINGLONG_ERR(
-          QStringLiteral("failed to lock repo, underlying data will not be removed: %1")
-            .arg(ret.error().message().c_str()));
+        return LINGLONG_ERR("failed to lock repo, underlying data will not be removed", ret);
     }
 
     auto unlock = utils::finally::finally([this] {
         auto ret = unlockRepo();
         if (!ret) {
-            qCritical() << "failed to unlock repo:" << ret.error().message();
+            LogE("failed to unlock repo: {}", ret.error());
         }
     });
 
     auto running = getAllRunningContainers();
     if (!running) {
-        return LINGLONG_ERR(QStringLiteral("failed to get running containers: %1")
-                              .arg(running.error().message().c_str()));
+        return LINGLONG_ERR("failed to get running containers", running);
     }
     auto &runningRef = *running;
 
@@ -192,8 +185,7 @@ PackageManager::getAllRunningContainers() noexcept
     std::error_code ec;
     auto user_iterator = std::filesystem::directory_iterator{ "/run/linglong", ec };
     if (ec) {
-        return LINGLONG_ERR(
-          QStringLiteral("failed to list /run/linglong: %1").arg(ec.message().c_str()));
+        return LINGLONG_ERR("failed to list /run/linglong", ec);
     }
 
     std::vector<api::types::v1::ContainerProcessStateInfo> result;
@@ -204,9 +196,7 @@ PackageManager::getAllRunningContainers() noexcept
 
         auto process_iterator = std::filesystem::directory_iterator{ entry.path(), ec };
         if (ec) {
-            return LINGLONG_ERR(QStringLiteral("failed to list %1: %2")
-                                  .arg(entry.path().c_str())
-                                  .arg(ec.message().c_str()));
+            return LINGLONG_ERR(fmt::format("failed to list {}", entry.path()), ec);
         }
 
         for (const auto &process_entry : process_iterator) {
@@ -217,23 +207,21 @@ PackageManager::getAllRunningContainers() noexcept
             auto pid = process_entry.path().filename().string();
             if (auto procDir = "/proc/" + pid; !std::filesystem::exists(procDir, ec)) {
                 if (ec) {
-                    return LINGLONG_ERR(QStringLiteral("failed to get state of %1: %2")
-                                          .arg(procDir.c_str())
-                                          .arg(ec.message().c_str()));
+                    return LINGLONG_ERR(fmt::format("failed to get state of {}", procDir), ec);
                 }
 
-                qInfo() << "ignore" << process_entry.path().c_str()
-                        << ",because corrsponding process is not found.";
+                LogI("ignore {} because corrsponding process is not found",
+                     process_entry.path().c_str());
                 continue;
             }
 
             auto content =
               utils::serialize::LoadJSONFile<api::types::v1::ContainerProcessStateInfo>(
-                QString::fromStdString(process_entry.path().string()));
+                process_entry.path());
             if (!content) {
-                return LINGLONG_ERR(QStringLiteral("failed to load info from %1: %2")
-                                      .arg(process_entry.path().c_str())
-                                      .arg(content.error().message().c_str()));
+                return LINGLONG_ERR(
+                  fmt::format("failed to load info from {}", process_entry.path()),
+                  content);
             }
 
             result.emplace_back(std::move(content).value());
@@ -351,13 +339,13 @@ utils::error::Result<void> PackageManager::switchAppVersion(const package::Refer
 void PackageManager::deferredUninstall() noexcept
 {
     if (auto ret = lockRepo(); !ret) {
-        qCritical() << "failed to lock repo:" << ret.error().message();
+        LogE("failed to lock repo: {}", ret.error());
         return;
     }
     auto unlock = utils::finally::finally([this] {
         auto ret = unlockRepo();
         if (!ret) {
-            qCritical() << "failed to unlock repo:" << ret.error().message();
+            LogE("failed to unlock repo: {}", ret.error());
         }
     });
 
@@ -430,13 +418,13 @@ void PackageManager::deferredUninstall() noexcept
 
 auto PackageManager::getConfiguration() const noexcept -> QVariantMap
 {
-    return utils::serialize::toQVariantMap(this->repo.getConfig());
+    return common::serialize::toQVariantMap(this->repo.getConfig());
 }
 
 void PackageManager::setConfiguration(const QVariantMap &parameters) noexcept
 {
     LogI("set configuration for package manager");
-    auto cfg = utils::serialize::fromQVariantMap<api::types::v1::RepoConfigV2>(parameters);
+    auto cfg = common::serialize::fromQVariantMap<api::types::v1::RepoConfigV2>(parameters);
     if (!cfg) {
         sendErrorReply(QDBusError::InvalidArgs, QString::fromStdString(cfg.error().message()));
         return;
@@ -486,7 +474,7 @@ QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd,
     }
 
     const auto &metaInfo = *metaInfoRet;
-    auto packageInfoRet = utils::parsePackageInfo(metaInfo.info);
+    auto packageInfoRet = utils::serialize::parsePackageInfo(metaInfo.info);
     if (!packageInfoRet) {
         return toDBusReply(packageInfoRet);
     }
@@ -575,7 +563,7 @@ QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd,
               && !options.skipInteraction) {
               Q_EMIT RequestInteraction(QDBusObjectPath(taskRef.taskObjectPath().c_str()),
                                         static_cast<int>(msgType),
-                                        utils::serialize::toQVariantMap(additionalMessage));
+                                        common::serialize::toQVariantMap(additionalMessage));
               QEventLoop loop;
               auto conn = connect(
                 this,
@@ -583,7 +571,7 @@ QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd,
                 [&taskRef, &loop](const QVariantMap &reply) {
                     // handle reply
                     auto interactionReply =
-                      utils::serialize::fromQVariantMap<api::types::v1::InteractionReply>(reply);
+                      common::serialize::fromQVariantMap<api::types::v1::InteractionReply>(reply);
                     if (interactionReply->action != "yes") {
                         taskRef.updateState(linglong::api::types::v1::State::Canceled, "canceled");
                     }
@@ -686,7 +674,7 @@ QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd,
     auto &taskRef = taskRet->get();
     Q_EMIT TaskAdded(QDBusObjectPath{ taskRef.taskObjectPath().c_str() });
     taskRef.updateState(linglong::api::types::v1::State::Queued, "queued to install from layer");
-    return utils::serialize::toQVariantMap(api::types::v1::PackageManager1PackageTaskResult{
+    return common::serialize::toQVariantMap(api::types::v1::PackageManager1PackageTaskResult{
       .taskObjectPath = taskRef.taskObjectPath(),
       .code = 0,
       .message = (realFile + " is now installing").toStdString(),
@@ -727,7 +715,7 @@ auto PackageManager::InstallFromFile(const QDBusUnixFileDescriptor &fd,
         return toDBusReply(utils::error::ErrorCode::Failed, "invalid file descriptor");
     }
 
-    auto opts = utils::serialize::fromQVariantMap<api::types::v1::CommonOptions>(options);
+    auto opts = common::serialize::fromQVariantMap<api::types::v1::CommonOptions>(options);
     if (!opts) {
         return toDBusReply(opts);
     }
@@ -750,7 +738,7 @@ auto PackageManager::InstallFromFile(const QDBusUnixFileDescriptor &fd,
 auto PackageManager::Install(const QVariantMap &parameters) noexcept -> QVariantMap
 {
     auto paras =
-      utils::serialize::fromQVariantMap<api::types::v1::PackageManager1InstallParameters>(
+      common::serialize::fromQVariantMap<api::types::v1::PackageManager1InstallParameters>(
         parameters);
     if (!paras) {
         return toDBusReply(utils::error::ErrorCode::AppInstallFailed, paras.error().message());
@@ -796,7 +784,7 @@ auto PackageManager::Install(const QVariantMap &parameters) noexcept -> QVariant
 auto PackageManager::Uninstall(const QVariantMap &parameters) noexcept -> QVariantMap
 {
     auto paras =
-      utils::serialize::fromQVariantMap<api::types::v1::PackageManager1UninstallParameters>(
+      common::serialize::fromQVariantMap<api::types::v1::PackageManager1UninstallParameters>(
         parameters);
     if (!paras) {
         return toDBusReply(utils::error::ErrorCode::AppUninstallFailed, paras.error().message());
@@ -897,7 +885,7 @@ auto PackageManager::Uninstall(const QVariantMap &parameters) noexcept -> QVaria
     auto &taskRef = taskRet->get();
     Q_EMIT TaskAdded(QDBusObjectPath{ taskRef.taskObjectPath().c_str() });
     taskRef.updateState(linglong::api::types::v1::State::Queued, "queued to uninstall");
-    return utils::serialize::toQVariantMap(api::types::v1::PackageManager1PackageTaskResult{
+    return common::serialize::toQVariantMap(api::types::v1::PackageManager1PackageTaskResult{
       .taskObjectPath = taskRef.taskObjectPath(),
       .code = 0,
       .message = refSpec + " is now uninstalling",
@@ -941,7 +929,7 @@ utils::error::Result<void> PackageManager::Uninstall(PackageTask &taskContext,
 
     auto mergeRet = this->repo.mergeModules();
     if (!mergeRet.has_value()) {
-        qCritical() << "merge modules failed: " << mergeRet.error().message();
+        LogE("merge modules failed: {}", mergeRet.error());
     }
 
     return LINGLONG_OK;
@@ -949,8 +937,9 @@ utils::error::Result<void> PackageManager::Uninstall(PackageTask &taskContext,
 
 auto PackageManager::Update(const QVariantMap &parameters) noexcept -> QVariantMap
 {
-    auto paras = utils::serialize::fromQVariantMap<api::types::v1::PackageManager1UpdateParameters>(
-      parameters);
+    auto paras =
+      common::serialize::fromQVariantMap<api::types::v1::PackageManager1UpdateParameters>(
+        parameters);
     if (!paras) {
         return toDBusReply(utils::error::ErrorCode::AppUpgradeFailed, paras.error().message());
     }
@@ -1079,8 +1068,9 @@ utils::error::Result<void> PackageManager::uninstallRef(
 
 auto PackageManager::Search(const QVariantMap &parameters) noexcept -> QVariantMap
 {
-    auto paras = utils::serialize::fromQVariantMap<api::types::v1::PackageManager1SearchParameters>(
-      parameters);
+    auto paras =
+      common::serialize::fromQVariantMap<api::types::v1::PackageManager1SearchParameters>(
+        parameters);
     if (!paras) {
         return toDBusReply(paras);
     }
@@ -1110,7 +1100,7 @@ auto PackageManager::Search(const QVariantMap &parameters) noexcept -> QVariantM
 
           Q_EMIT this->SearchFinished(
             QString::fromStdString(task.taskID()),
-            utils::serialize::toQVariantMap(api::types::v1::PackageManager1SearchResult{
+            common::serialize::toQVariantMap(api::types::v1::PackageManager1SearchResult{
               .packages = std::move(pkgs),
               .code = 0,
               .message = "",
@@ -1124,7 +1114,7 @@ auto PackageManager::Search(const QVariantMap &parameters) noexcept -> QVariantM
     auto &taskRef = task->get();
     taskRef.updateState(linglong::api::types::v1::State::Queued,
                         fmt::format("search {}", paras->id));
-    auto result = utils::serialize::toQVariantMap(api::types::v1::PackageManager1JobInfo{
+    auto result = common::serialize::toQVariantMap(api::types::v1::PackageManager1JobInfo{
       .id = taskRef.taskID(),
       .code = 0,
       .message = "",
@@ -1214,7 +1204,7 @@ auto PackageManager::Prune() noexcept -> QVariantMap
             .message = "",
         };
         Q_EMIT PruneFinished(QString::fromStdString(task.taskID()),
-                             utils::serialize::toQVariantMap(result));
+                             common::serialize::toQVariantMap(result));
         task.updateState(linglong::api::types::v1::State::Succeed, "prune");
     });
     if (!task) {
@@ -1223,7 +1213,7 @@ auto PackageManager::Prune() noexcept -> QVariantMap
 
     auto &taskRef = task->get();
     taskRef.updateState(linglong::api::types::v1::State::Queued, "prune");
-    auto result = utils::serialize::toQVariantMap(api::types::v1::PackageManager1JobInfo{
+    auto result = common::serialize::toQVariantMap(api::types::v1::PackageManager1JobInfo{
       .id = taskRef.taskID(),
       .code = 0,
       .message = "",
@@ -1267,7 +1257,7 @@ PackageManager::Prune(std::vector<api::types::v1::PackageInfoV2> &removed) noexc
     auto scanExtensionsByRef = [scanExtensionsByInfo, this](package::Reference &ref) {
         auto item = this->repo.getLayerItem(ref);
         if (!item) {
-            qWarning() << item.error().message();
+            LogW("{}", item.error());
             return;
         }
         scanExtensionsByInfo(item->info);
@@ -1281,7 +1271,7 @@ PackageManager::Prune(std::vector<api::types::v1::PackageInfoV2> &removed) noexc
         if (info.kind != "app") {
             auto ref = package::Reference::fromPackageInfo(info);
             if (!ref) {
-                qWarning() << ref.error().message();
+                LogW("{}", ref.error());
                 continue;
             }
             // Note: if the ref already exists, it's ok, somebody depends it.
@@ -1292,7 +1282,7 @@ PackageManager::Prune(std::vector<api::types::v1::PackageInfoV2> &removed) noexc
         if (info.runtime) {
             auto runtimeFuzzyRef = package::FuzzyReference::parse(info.runtime.value());
             if (!runtimeFuzzyRef) {
-                qWarning() << runtimeFuzzyRef.error().message();
+                LogW("{}", runtimeFuzzyRef.error());
                 continue;
             }
 
@@ -1303,7 +1293,7 @@ PackageManager::Prune(std::vector<api::types::v1::PackageInfoV2> &removed) noexc
                                                           .semanticMatching = true,
                                                         });
             if (!runtimeRef) {
-                qWarning() << runtimeRef.error().message();
+                LogW("{}", runtimeRef.error());
                 continue;
             }
             target[*runtimeRef] += 1;
@@ -1312,7 +1302,7 @@ PackageManager::Prune(std::vector<api::types::v1::PackageInfoV2> &removed) noexc
 
         auto baseFuzzyRef = package::FuzzyReference::parse(info.base);
         if (!baseFuzzyRef) {
-            qWarning() << baseFuzzyRef.error().message();
+            LogW("{}", baseFuzzyRef.error());
             continue;
         }
 
@@ -1323,7 +1313,7 @@ PackageManager::Prune(std::vector<api::types::v1::PackageInfoV2> &removed) noexc
                                                    .semanticMatching = true,
                                                  });
         if (!baseRef) {
-            qWarning() << baseRef.error().message();
+            LogW("{}", baseRef.error());
             continue;
         }
         target[*baseRef] += 1;
@@ -1340,14 +1330,14 @@ PackageManager::Prune(std::vector<api::types::v1::PackageInfoV2> &removed) noexc
         for (const auto &module : this->repo.getModuleList(it.first)) {
             auto layer = this->repo.getLayerDir(it.first, module);
             if (!layer) {
-                qWarning() << layer.error().message();
+                LogW("{}", layer.error());
                 continue;
             }
 
             auto info = layer->info();
 
             if (!info) {
-                qWarning() << info.error().message();
+                LogW("{}", info.error());
                 continue;
             }
 
@@ -1363,7 +1353,7 @@ PackageManager::Prune(std::vector<api::types::v1::PackageInfoV2> &removed) noexc
     if (!target.empty()) {
         auto mergeRet = this->repo.mergeModules();
         if (!mergeRet.has_value()) {
-            qCritical() << "merge modules failed: " << mergeRet.error().message();
+            LogE("merge modules failed: {}", mergeRet.error());
         }
     }
     auto pruneRet = this->repo.prune();
@@ -1423,9 +1413,7 @@ PackageManager::executePostInstallHooks(const package::Reference &ref) noexcept
         return LINGLONG_ERR(layerDir);
     }
 
-    auto appPath = layerDir->absolutePath();
-
-    ret = installHookManager->executePostInstallHooks(ref.id, appPath.toStdString());
+    ret = installHookManager->executePostInstallHooks(ref.id, layerDir->path());
     if (!ret) {
         return LINGLONG_ERR(ret);
     }
@@ -1461,12 +1449,12 @@ bool PackageManager::waitConfirm(
 {
     Q_EMIT RequestInteraction(QDBusObjectPath(taskRef.taskObjectPath().c_str()),
                               static_cast<int>(msgType),
-                              utils::serialize::toQVariantMap(additionalMessage));
+                              common::serialize::toQVariantMap(additionalMessage));
     QEventLoop loop;
     auto conn =
       connect(this, &PackageManager::ReplyReceived, [&taskRef, &loop](const QVariantMap &reply) {
           auto interactionReply =
-            utils::serialize::fromQVariantMap<api::types::v1::InteractionReply>(reply);
+            common::serialize::fromQVariantMap<api::types::v1::InteractionReply>(reply);
           if (interactionReply->action != "yes") {
               taskRef.updateState(linglong::api::types::v1::State::Canceled, "canceled");
           }
@@ -1509,7 +1497,7 @@ QVariantMap PackageManager::runActionOnTaskQueue(std::shared_ptr<Action> action)
     auto &taskRef = taskRet->get();
     Q_EMIT TaskAdded(QDBusObjectPath{ taskRef.taskObjectPath().c_str() });
     taskRef.updateState(linglong::api::types::v1::State::Queued, action->getTaskName());
-    return utils::serialize::toQVariantMap(api::types::v1::PackageManager1PackageTaskResult{
+    return common::serialize::toQVariantMap(api::types::v1::PackageManager1PackageTaskResult{
       .taskObjectPath = taskRef.taskObjectPath(),
       .code = 0,
       .message = action->getTaskName() + " is queued",

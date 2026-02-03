@@ -5,17 +5,13 @@
 #include "package_task.h"
 
 #include "linglong/adaptors/task/task1.h"
+#include "linglong/common/dbus/register.h"
 #include "linglong/package_manager/package_manager.h"
-#include "linglong/utils/dbus/register.h"
 #include "linglong/utils/error/error.h"
-#include "linglong/utils/global/initialize.h"
 #include "linglong/utils/log/formatter.h" // IWYU pragma: keep
 
 #include <fmt/format.h>
 #include <sys/prctl.h>
-
-#include <QDebug>
-#include <QUuid>
 
 #include <utility>
 
@@ -95,15 +91,14 @@ utils::error::Result<void> PackageTask::exposeOnDBus(const QDBusConnection &conn
     if (interfaceIndex == -1) {
         return LINGLONG_ERR("internal adaptor error");
     }
-    auto ret =
-      linglong::utils::dbus::registerDBusObject(connection, taskObjectPath().c_str(), this);
+    auto ret = common::dbus::registerDBusObject(connection, taskObjectPath().c_str(), this);
     if (!ret) {
         return LINGLONG_ERR(ret);
     }
 
     const auto *interface = mo->classInfo(interfaceIndex).value();
     m_forwarder =
-      new utils::dbus::PropertiesForwarder(connection, taskObjectPath().c_str(), interface, this);
+      new common::dbus::PropertiesForwarder(connection, taskObjectPath().c_str(), interface, this);
 
     QObject::connect(this, &PackageTask::changePropertiesDone, m_forwarder, [this]() {
         auto ret = m_forwarder->forward();

@@ -35,6 +35,17 @@ pfl_add_library(
   src/linglong/cli/printer.h
   src/linglong/cli/terminal_notifier.cpp
   src/linglong/cli/terminal_notifier.h
+  src/linglong/common/dbus/properties_forwarder.cpp
+  src/linglong/common/dbus/properties_forwarder.h
+  src/linglong/common/dbus/register.cpp
+  src/linglong/common/dbus/register.h
+  src/linglong/common/formatter.cpp
+  src/linglong/common/formatter.h
+  src/linglong/common/gkeyfile_wrapper.h
+  src/linglong/common/global/initialize.cpp
+  src/linglong/common/global/initialize.h
+  src/linglong/common/serialize/json.cpp
+  src/linglong/common/serialize/json.h
   src/linglong/extension/extension.cpp
   src/linglong/extension/extension.h
   src/linglong/package/architecture.cpp
@@ -110,6 +121,7 @@ pfl_add_library(
   linglong::dbus-api
   linglong::utils
   linglong::api
+  PkgConfig::glib2
   PkgConfig::ostree1
   PkgConfig::systemd
   PkgConfig::ELF

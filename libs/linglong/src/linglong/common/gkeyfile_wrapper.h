@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "linglong/common/formatter.h"
 #include "linglong/utils/error/error.h"
 
 #include <fmt/format.h>
@@ -15,7 +16,7 @@
 #include <QFile>
 #include <QString>
 
-namespace linglong::utils {
+namespace linglong::common {
 
 class GKeyFileWrapper final
 {
@@ -32,7 +33,7 @@ public:
     auto operator=(const GKeyFileWrapper &) -> GKeyFileWrapper & = delete;
     ~GKeyFileWrapper() = default;
 
-    static auto New(const QString &filePath) -> error::Result<GKeyFileWrapper>
+    static auto New(const QString &filePath) -> utils::error::Result<GKeyFileWrapper>
     {
         LINGLONG_TRACE(fmt::format("create GKeyFileWrapper for {}", filePath.toStdString()));
 
@@ -48,7 +49,7 @@ public:
                                   G_KEY_FILE_KEEP_TRANSLATIONS,
                                   &gErr);
         if (gErr != nullptr) {
-            return LINGLONG_ERR("g_key_file_load_from_file", gErr);
+            return LINGLONG_ERR(fmt::format("g_key_file_load_from_file {}", ptr_view(gErr)));
         }
 
         return entry;
@@ -63,7 +64,7 @@ public:
     }
 
     template <typename Value>
-    auto getValue(const QString &key, const GroupName &group) const -> error::Result<Value>
+    auto getValue(const QString &key, const GroupName &group) const -> utils::error::Result<Value>
     {
         LINGLONG_TRACE(fmt::format("get {} from {}", key.toStdString(), group.toStdString()));
 
@@ -74,7 +75,7 @@ public:
                                                         &gErr);
 
         if (gErr != nullptr) {
-            return LINGLONG_ERR("g_key_file_get_string", gErr);
+            return LINGLONG_ERR(fmt::format("g_key_file_get_string {}", ptr_view(gErr)));
         }
 
         return value;
@@ -94,7 +95,7 @@ public:
         return result;
     }
 
-    auto getkeys(const QString &group) -> error::Result<QStringList>
+    auto getkeys(const QString &group) -> utils::error::Result<QStringList>
     {
         LINGLONG_TRACE("get keys from " + group.toStdString());
 
@@ -105,7 +106,7 @@ public:
                                                  &length,
                                                  &gErr);
         if (gErr != nullptr) {
-            return LINGLONG_ERR("g_key_file_get_keys", gErr);
+            return LINGLONG_ERR(fmt::format("g_key_file_get_keys {}", ptr_view(gErr)));
         }
 
         QStringList result;
@@ -117,7 +118,7 @@ public:
         return result;
     }
 
-    auto saveToFile(const QString &filepath) -> error::Result<void>
+    auto saveToFile(const QString &filepath) -> utils::error::Result<void>
     {
         LINGLONG_TRACE(fmt::format("save to {}", filepath.toStdString()));
 
@@ -125,13 +126,13 @@ public:
 
         g_key_file_save_to_file(this->gKeyFile.get(), filepath.toLocal8Bit().constData(), &gErr);
         if (gErr != nullptr) {
-            return LINGLONG_ERR("g_key_file_save_to_file", gErr);
+            return LINGLONG_ERR(fmt::format("g_key_file_save_to_file {}", ptr_view(gErr)));
         }
 
         return LINGLONG_OK;
     }
 
-    auto hasKey(const QString &key, const GroupName &group) -> error::Result<bool>
+    auto hasKey(const QString &key, const GroupName &group) -> utils::error::Result<bool>
     {
         LINGLONG_TRACE(
           fmt::format("check {} is in {} or not", key.toStdString(), group.toStdString()));
@@ -143,7 +144,7 @@ public:
                                &gErr)
             == FALSE) {
             if (gErr != nullptr) {
-                return LINGLONG_ERR("g_key_file_has_key", gErr);
+                return LINGLONG_ERR(fmt::format("g_key_file_has_key {}", ptr_view(gErr)));
             }
             return false;
         }
@@ -157,4 +158,4 @@ private:
     std::unique_ptr<GKeyFile, decltype(&g_key_file_free)> gKeyFile;
 };
 
-} // namespace linglong::utils
+} // namespace linglong::common
