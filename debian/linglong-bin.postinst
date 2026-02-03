@@ -33,6 +33,10 @@ if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-decon
         fi
 fi
 
+if grep -qE '^ID="?(deepin|uos)"?' /etc/os-release; then
+        ll-cli repo enable-mirror stable || true
+fi
+
 case "$1" in
 configure)
         # enable kernel.unprivileged_userns_clone

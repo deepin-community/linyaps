@@ -1,15 +1,24 @@
-Index: linyaps/libs/linglong/src/linglong/cli/cli.cpp
-===================================================================
---- linyaps.orig/libs/linglong/src/linglong/cli/cli.cpp
-+++ linyaps/libs/linglong/src/linglong/cli/cli.cpp
-@@ -2207,9 +2207,17 @@ int Cli::content([[maybe_unused]] CLI::A
-         qCritical() << "failed to check symlink " << file.c_str() << ":" << ec.message().c_str();
+From 8b7697bf3c6230f6eec8faca146b1672180c84f4 Mon Sep 17 00:00:00 2001
+From: wrj97 <wurongjie@deepin.org>
+Date: Mon, 2 Feb 2026 16:23:20 +0800
+Subject: [PATCH] feat: extend path mapping skip list
+
+---
+ libs/linglong/src/linglong/cli/cli.cpp | 14 +++++++++++---
+ 1 file changed, 11 insertions(+), 3 deletions(-)
+
+diff --git a/libs/linglong/src/linglong/cli/cli.cpp b/libs/linglong/src/linglong/cli/cli.cpp
+index 3576c00d..2ea10903 100644
+--- a/libs/linglong/src/linglong/cli/cli.cpp
++++ b/libs/linglong/src/linglong/cli/cli.cpp
+@@ -1709,9 +1709,17 @@ int Cli::content(const ContentOptions &options)
+         LogE("failed to check symlink {}: {}", file.c_str(), ec.message());
      }
  
 -    // Dont't mapping the file under /home
 -    if (auto tmp = target.string(); tmp.rfind("/home/", 0) == 0) {
 -        return target;
-+    //Do not mapping files in the following directories, which have been mounted into the container
++    // Do not mapping files in the following directories, which have been mounted into the container
 +    std::vector<std::string> skipMappingPaths{ "/home/",
 +                                               "/media/",
 +                                               "/usr/share/icons/",
@@ -23,3 +32,6 @@ Index: linyaps/libs/linglong/src/linglong/cli/cli.cpp
      }
  
      return std::filesystem::path{ "/run/host/rootfs" }
+-- 
+2.51.0
+
