@@ -1,8 +1,22 @@
-Index: linyaps/libs/linglong/src/linglong/repo/ostree_repo.cpp
-===================================================================
---- linyaps.orig/libs/linglong/src/linglong/repo/ostree_repo.cpp
-+++ linyaps/libs/linglong/src/linglong/repo/ostree_repo.cpp
-@@ -1271,6 +1271,21 @@ utils::error::Result<void> OSTreeRepo::p
+From a65d09373baf979b191025ee38e4d566df8d2bdd Mon Sep 17 00:00:00 2001
+From: wrj97 <wurongjie@deepin.org>
+Date: Tue, 3 Mar 2026 15:43:52 +0800
+Subject: [PATCH] fix: access denied due to trailing newline in token
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+查询token的命令行输出尾部有换行, 带换行的token被添加到http header中
+部分服务器拒绝响应这种不规范的请求
+---
+ .../src/linglong/repo/ostree_repo.cpp         | 34 +++++++++++++++++++
+ 1 file changed, 34 insertions(+)
+
+diff --git a/libs/linglong/src/linglong/repo/ostree_repo.cpp b/libs/linglong/src/linglong/repo/ostree_repo.cpp
+index f98af3b6..e637eea6 100644
+--- a/libs/linglong/src/linglong/repo/ostree_repo.cpp
++++ b/libs/linglong/src/linglong/repo/ostree_repo.cpp
+@@ -1106,6 +1106,28 @@ utils::error::Result<void> OSTreeRepo::prune()
      return LINGLONG_OK;
  }
  
@@ -10,21 +24,28 @@ Index: linyaps/libs/linglong/src/linglong/repo/ostree_repo.cpp
 +utils::error::Result<std::string> getAptToken() noexcept
 +{
 +    LINGLONG_TRACE("get apt token");
-+    auto aptToken = linglong::utils::Cmd("sh").exec({
-+      "-c",
-+      "eval `apt-config shell Token Acquire::SmartMirrors::Token`; echo $Token",
-+    });
++    auto aptToken =
++      linglong::utils::Cmd("apt-config").exec({ "shell", "Token", "Acquire::SmartMirrors::Token" });
 +
 +    if (!aptToken) {
 +        return LINGLONG_ERR(aptToken);
 +    }
-+    return aptToken;
++    auto token = *aptToken;
++    if (token.empty()) {
++        return LINGLONG_ERR("not found token");
++    }
++    auto start = token.find("'");
++    auto end = token.rfind("'");
++    if (start != std::string::npos && end != std::string::npos && end > start) {
++        return token.substr(start + 1, end - start - 1);
++    }
++    return LINGLONG_ERR("token format error");
 +}
 +
  // 初始化一个GVariantBuilder
  GVariantBuilder OSTreeRepo::initOStreePullOptions(const std::string &ref) noexcept
  {
-@@ -1291,6 +1306,18 @@ GVariantBuilder OSTreeRepo::initOStreePu
+@@ -1126,6 +1148,18 @@ GVariantBuilder OSTreeRepo::initOStreePullOptions(const std::string &ref) noexce
                            "{s@v}",
                            "refs",
                            g_variant_new_variant(g_variant_new_strv(refs.data(), -1)));
@@ -43,3 +64,6 @@ Index: linyaps/libs/linglong/src/linglong/repo/ostree_repo.cpp
      return builder;
  }
  
+-- 
+2.51.0
+
