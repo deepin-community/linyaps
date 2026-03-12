@@ -108,6 +108,7 @@ cd build
 %{_datadir}/locale/*
 %{_datadir}/applications/*
 %{_datadir}/icons/*
+%{_datadir}/fish/vendor_completions.d/ll-cli.fish
 
 %files -n linglong-builder
 %license LICENSE
