@@ -120,6 +120,8 @@ cd build
 %{_libexecdir}/%{name}/app-conf-generator
 %{_libexecdir}/%{name}/builder/helper/*.sh
 %{_datadir}/bash-completion/completions/ll-builder
+%{_datadir}/zsh/vendor-completions/_ll-builder
+%{_datadir}/fish/vendor_completions.d/ll-builder.fish
 %{_datadir}/%{name}/builder/templates/*.yaml
 %{_datadir}/%{name}/builder/uab/*
 

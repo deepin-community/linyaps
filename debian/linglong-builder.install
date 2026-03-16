@@ -6,5 +6,7 @@ usr/libexec/linglong/fetch-dsc-source
 usr/libexec/linglong/fetch-file-source
 usr/libexec/linglong/fetch-git-source
 usr/share/bash-completion/completions/ll-builder
+usr/share/zsh/vendor-completions/_ll-builder
+usr/share/fish/vendor_completions.d/ll-builder.fish
 usr/share/linglong/builder/templates/*.yaml
 usr/share/linglong/builder/uab/*
