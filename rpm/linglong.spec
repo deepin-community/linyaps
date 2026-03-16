@@ -99,8 +99,6 @@ cd build
 %{_libexecdir}/%{name}/dialog/99-linglong-permission
 %{_datadir}/bash-completion/completions/ll-cli
 %{_datadir}/zsh/vendor-completions/_ll-cli
-%{_datadir}/bash-completion/completions/ll-builder
-%{_datadir}/zsh/vendor-completions/_ll-builder
 %{_datadir}/dbus-1/system-services/*.service
 %{_datadir}/dbus-1/system.d/*.conf
 %{_datadir}/polkit-1/actions/org.deepin.linglong.PackageManager1.policy
@@ -111,7 +109,6 @@ cd build
 %{_datadir}/applications/*
 %{_datadir}/icons/*
 %{_datadir}/fish/vendor_completions.d/ll-cli.fish
-%{_datadir}/fish/vendor_completions.d/ll-builder.fish
 
 %files -n linglong-builder
 %license LICENSE
@@ -123,6 +120,8 @@ cd build
 %{_libexecdir}/%{name}/app-conf-generator
 %{_libexecdir}/%{name}/builder/helper/*.sh
 %{_datadir}/bash-completion/completions/ll-builder
+%{_datadir}/zsh/vendor-completions/_ll-builder
+%{_datadir}/fish/vendor_completions.d/ll-builder.fish
 %{_datadir}/%{name}/builder/templates/*.yaml
 %{_datadir}/%{name}/builder/uab/*
 
