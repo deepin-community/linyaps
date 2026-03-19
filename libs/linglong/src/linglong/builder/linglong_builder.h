@@ -56,7 +56,8 @@ utils::error::Result<void> cmdRemoveApp(repo::OSTreeRepo &repo,
 namespace detail {
 void mergeOutput(const std::vector<std::filesystem::path> &src,
                  const std::filesystem::path &dest,
-                 const std::vector<std::string> &targets);
+                 const std::vector<std::string> &targets,
+                 const std::vector<std::string> &excludes);
 }
 
 class Builder
@@ -97,6 +98,7 @@ public:
     auto run(std::vector<std::string> modules,
              std::vector<std::string> args,
              bool debug = false,
+             const std::string &workdir = "",
              std::vector<std::string> extensions = {}) -> utils::error::Result<void>;
     auto runtimeCheck() -> utils::error::Result<void>;
     auto runFromRepo(const package::Reference &ref, const std::vector<std::string> &args)

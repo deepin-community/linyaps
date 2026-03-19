@@ -715,9 +715,18 @@ int Cli::run(const RunOptions &options)
         return -1;
     }
 
+    auto process = ocppi::runtime::config::types::Process{ .args = std::move(commands) };
+    if (!options.workdir.value_or("").empty()) {
+        auto workdir = std::filesystem::path(options.workdir.value());
+        if (!workdir.is_absolute()) {
+            auto msg = fmt::format("Workdir must be an absolute path: {}", workdir);
+            this->printer.printErr(LINGLONG_ERRV(msg));
+            return -1;
+        }
+        process.cwd = workdir;
+    }
     ocppi::runtime::RunOption opt{};
-    auto result =
-      (*container)->run(ocppi::runtime::config::types::Process{ .args = std::move(commands) }, opt);
+    auto result = (*container)->run(process, opt);
     if (!result) {
         this->printer.printErr(result.error());
         return -1;
@@ -1079,6 +1088,7 @@ int Cli::upgrade(const UpgradeOptions &options)
     }
 
     api::types::v1::PackageManager1UpdateParameters params;
+    params.appOnly = options.appOnly;
     params.depsOnly = options.depsOnly;
     for (const auto &ref : toUpgrade) {
         api::types::v1::PackageManager1Package package;
@@ -1582,7 +1592,8 @@ int Cli::info(const InfoOptions &options)
                                           { .forceRemote = false, .fallbackToRemote = false });
         if (!ref) {
             LogD("{}", ref.error());
-            this->printer.printErr(LINGLONG_ERRV("Can not find such application."));
+            this->printer.printErr(LINGLONG_ERRV("Cannot find such application.",
+                                                 utils::error::ErrorCode::AppNotFoundFromLocal));
             return -1;
         }
 
@@ -1657,31 +1668,40 @@ int Cli::content(const ContentOptions &options)
         return -1;
     }
 
-    QDir entriesDir((layer->path() / "entries/share").c_str());
+    QDir entriesDir((layer->path() / "entries").c_str());
     if (!entriesDir.exists()) {
         this->printer.printErr(LINGLONG_ERR("no entries found").value());
         return -1;
     }
+
+    const auto preferLibSystemdUser = QFileInfo(entriesDir.filePath("lib/systemd/user")).exists();
 
     QDirIterator it(entriesDir.absolutePath(),
                     QDir::AllEntries | QDir::NoDot | QDir::NoDotDot | QDir::System,
                     QDirIterator::Subdirectories);
     while (it.hasNext()) {
         it.next();
-        contents.append(it.fileInfo().absoluteFilePath());
-    }
-    // replace $LINGLONG_ROOT/layers/appid/verison/arch/module/entries to ${LINGLONG_ROOT}/entires
-    contents.replaceInStrings(entriesDir.absolutePath(), QString(LINGLONG_ROOT) + "/entries/share");
-
-    // only show the contents which are exported
-    for (int pos = 0; pos < contents.size(); ++pos) {
-        QFileInfo info(contents.at(pos));
-        if (!info.exists()) {
-            contents.removeAt(pos);
+        const auto entryPath = it.fileInfo().absoluteFilePath();
+        const auto relativePath =
+          std::filesystem::path(entriesDir.relativeFilePath(entryPath).toStdString());
+        const auto exportPath =
+          this->repository.resolveEntryExportPath(relativePath, preferLibSystemdUser);
+        if (!exportPath.empty()) {
+            contents.append(QString::fromStdString(exportPath.string()));
         }
     }
 
-    this->printer.printContent(contents);
+    // only show the contents which are exported
+    QStringList exportedContents{};
+    for (const auto &content : std::as_const(contents)) {
+        QFileInfo info(content);
+        if (!info.exists() || info.isDir()) {
+            continue;
+        }
+        exportedContents.append(content);
+    }
+
+    this->printer.printContent(exportedContents);
     return 0;
 }
 
