@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2024 UnionTech Software Technology Co., Ltd.
+ * SPDX-FileCopyrightText: 2022 - 2026 UnionTech Software Technology Co., Ltd.
  *
  * SPDX-License-Identifier: LGPL-3.0-or-later
  */
@@ -80,7 +80,17 @@ public:
     OSTreeRepo(OSTreeRepo &&) = delete;
     OSTreeRepo &operator=(const OSTreeRepo &) = delete;
     OSTreeRepo &operator=(OSTreeRepo &&) = delete;
-    OSTreeRepo(const QDir &path, api::types::v1::RepoConfigV2 cfg) noexcept;
+
+    // Load existing repo from path, config is loaded from config.yaml
+    // Opens existing ostree repo and cache
+    // Returns error if any step fails
+    static utils::error::Result<std::unique_ptr<OSTreeRepo>>
+    loadFromPath(std::filesystem::path repoRoot) noexcept;
+
+    // load or create repo with explicit config
+    // Tries to open existing ostree repo, creates if load failed
+    static utils::error::Result<std::unique_ptr<OSTreeRepo>>
+    create(std::filesystem::path repoRoot, api::types::v1::RepoConfigV2 cfg) noexcept;
 
     ~OSTreeRepo() override;
 
@@ -144,6 +154,8 @@ public:
            const std::optional<std::string> &subRef = std::nullopt) noexcept;
     utils::error::Result<void>
     remove(const api::types::v1::RepositoryCacheLayersItem &item) noexcept;
+    utils::error::Result<void>
+    clean(const std::vector<api::types::v1::RepositoryCacheLayersItem> &reserved) noexcept;
 
     utils::error::Result<void> prune();
 
@@ -220,19 +232,28 @@ private:
     };
 
     std::unique_ptr<OstreeRepo, OstreeRepoDeleter> ostreeRepo = nullptr;
-    QDir repoDir;
+    std::filesystem::path repoDir;
     std::unique_ptr<linglong::repo::RepoCache> cache{ nullptr };
 
     utils::error::Result<void> updateConfig(const api::types::v1::RepoConfigV2 &newCfg) noexcept;
-    QDir ostreeRepoDir() const noexcept;
+    std::filesystem::path ostreeRepoDir() const noexcept;
+    std::filesystem::path cacheFilePath() const noexcept;
+    std::filesystem::path configFilePath() const noexcept;
     [[nodiscard]] utils::error::Result<QDir>
     ensureEmptyLayerDir(const std::string &commit) const noexcept;
     utils::error::Result<void> handleRepositoryUpdate(
       QDir layerDir, const api::types::v1::RepositoryCacheLayersItem &layer) noexcept;
+    utils::error::Result<void> removeOstreeRef(const std::string &remote,
+                                               const std::string &ref,
+                                               const std::string &commit) noexcept;
     utils::error::Result<void>
     removeOstreeRef(const api::types::v1::RepositoryCacheLayersItem &layer) noexcept;
+    utils::error::Result<void> undeployedLayer(const std::string &commit) noexcept;
     utils::error::Result<void>
     undeployedLayer(const api::types::v1::RepositoryCacheLayersItem &layer) noexcept;
+    [[nodiscard]] std::filesystem::path layerPath(const std::string &commit) const noexcept;
+    [[nodiscard]] utils::error::Result<package::LayerDir>
+    getLayerDir(const std::string &commit) const noexcept;
     [[nodiscard]] utils::error::Result<package::LayerDir>
     getLayerDir(const api::types::v1::RepositoryCacheLayersItem &layer) const noexcept;
 
@@ -250,12 +271,21 @@ private:
     GVariantBuilder initOStreePullOptions(const std::string &ref) noexcept;
 
 protected:
+    OSTreeRepo(std::filesystem::path path, api::types::v1::RepoConfigV2 cfg) noexcept;
+    static std::vector<std::string> buildPullRefCandidates(const package::Reference &ref,
+                                                           const std::string &module) noexcept;
+    static bool shouldFallbackToRuntimeBranch(const std::string &module,
+                                              const GError *gErr) noexcept;
+
+    utils::error::Result<void> init(bool create) noexcept;
+    utils::error::Result<void> initCache(bool create) noexcept;
+
     // entries目录，/var/lib/linglong/entries
-    QDir getEntriesDir() const noexcept;
+    std::filesystem::path getEntriesDir() const noexcept;
     // 默认的shared目录，/var/lib/linglong/entries/share
-    QDir getDefaultSharedDir() const noexcept;
+    std::filesystem::path getDefaultSharedDir() const noexcept;
     // 能覆盖系统目录的shared目录，/var/lib/linglong/entries/apps/share
-    virtual QDir getOverlayShareDir() const noexcept;
+    virtual std::filesystem::path getOverlayShareDir() const noexcept;
     utils::error::Result<void> exportDir(const std::string &appID,
                                          const std::filesystem::path &source,
                                          const std::filesystem::path &destination,
