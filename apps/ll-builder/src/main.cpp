@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022 UnionTech Software Technology Co., Ltd.
+ * SPDX-FileCopyrightText: 2022 - 2026 UnionTech Software Technology Co., Ltd.
  *
  * SPDX-License-Identifier: LGPL-3.0-or-later
  */
@@ -16,6 +16,7 @@
 #include "linglong/repo/config.h"
 #include "linglong/repo/migrate.h"
 #include "linglong/utils/error/error.h"
+#include "linglong/utils/file.h"
 #include "linglong/utils/gettext.h"
 #include "linglong/utils/log/log.h"
 #include "linglong/utils/namespace.h"
@@ -983,12 +984,8 @@ You can report bugs to the linyaps team under this project: https://github.com/O
         return 0;
     }
 
-    // build command need run in namespace because:
-    // 1. fuse-overlayfs should run in new user_namespaces and
-    // run with CAP_DAC_OVERRIDE capbilities.
-    // 2. mount needs CAP_SYS_ADMIN capbilities in the
-    // user_namespaces associated with current mount_namespaces,
-    if (buildBuilder->parsed()) {
+    // command which runs container need run in new user namespace and mount namespace
+    if (buildBuilder->parsed() || buildExport->parsed() || buildRun->parsed()) {
         auto res = linglong::utils::needRunInNamespace();
         if (!res) {
             LogE("failed to check need run in namespace {}", res.error());
@@ -1005,6 +1002,8 @@ You can report bugs to the linyaps team under this project: https://github.com/O
         }
     }
 
+    linglong::utils::checkPauseDebugger();
+
     if (buildCreate->parsed()) {
         return handleCreate(createOpts);
     }
@@ -1020,9 +1019,8 @@ You can report bugs to the linyaps team under this project: https://github.com/O
         return -1;
     }
 
-    auto repoCfg =
-      linglong::repo::loadConfig({ QString::fromStdString(builderCfg->repo + "/config.yaml"),
-                                   LINGLONG_DATA_DIR "/config.yaml" });
+    auto repoCfg = linglong::repo::loadConfig(
+      { builderCfg->repo + "/config.yaml", LINGLONG_DATA_DIR "/config.yaml" });
     if (!repoCfg) {
         LogE("{}", repoCfg.error());
         return -1;
@@ -1035,16 +1033,21 @@ You can report bugs to the linyaps team under this project: https://github.com/O
         }
     }
 
-    auto repoRoot = QDir{ QString::fromStdString(builderCfg->repo) };
-    if (!repoRoot.exists() && !repoRoot.mkpath(".")) {
-        LogE("failed to create the repository of builder.");
+    std::filesystem::path repoRoot(builderCfg->repo);
+    auto res = linglong::utils::ensureDirectory(repoRoot);
+    if (!res) {
+        LogE("failed to create the repository of builder: {}", res.error());
         return -1;
     }
 
-    linglong::repo::OSTreeRepo repo(repoRoot, *repoCfg);
+    auto repo = linglong::repo::OSTreeRepo::create(repoRoot, *repoCfg);
+    if (!repo) {
+        LogE("failed to create ostree repo {}", repo.error());
+        return -1;
+    }
 
     if (buildRepo->parsed()) {
-        return handleRepo(repo,
+        return handleRepo(**repo,
                           repoCmdOpts,
                           buildRepoShow,
                           buildRepoAdd,
@@ -1056,19 +1059,19 @@ You can report bugs to the linyaps team under this project: https://github.com/O
     }
 
     if (buildImport->parsed()) {
-        return handleImport(repo, importOpts);
+        return handleImport(**repo, importOpts);
     }
 
     if (buildImportDir->parsed()) {
-        return handleImportDir(repo, importDirOpts);
+        return handleImportDir(**repo, importDirOpts);
     }
 
     if (buildList->parsed()) {
-        return handleList(repo, listOpts);
+        return handleList(**repo, listOpts);
     }
 
     if (buildRemove->parsed()) {
-        return handleRemove(repo, removeOpts);
+        return handleRemove(**repo, removeOpts);
     }
 
     // following command need builder
@@ -1088,8 +1091,7 @@ You can report bugs to the linyaps team under this project: https://github.com/O
         std::rethrow_exception(ociRuntime.error());
     }
 
-    auto *containerBuilder = new linglong::runtime::ContainerBuilder(**ociRuntime);
-    containerBuilder->setParent(QCoreApplication::instance());
+    auto containerBuilder = std::make_unique<linglong::runtime::ContainerBuilder>(**ociRuntime);
 
     // use the current directory as the project(working) directory
     std::error_code ec;
@@ -1120,7 +1122,7 @@ You can report bugs to the linyaps team under this project: https://github.com/O
 
     linglong::builder::Builder builder(std::move(project),
                                        cwd,
-                                       repo,
+                                       **repo,
                                        *containerBuilder,
                                        *builderCfg);
 

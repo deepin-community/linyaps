@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023 UnionTech Software Technology Co., Ltd.
+ * SPDX-FileCopyrightText: 2023 - 2026 UnionTech Software Technology Co., Ltd.
  *
  * SPDX-License-Identifier: LGPL-3.0-or-later
  */
@@ -8,6 +8,7 @@
 
 #include "configure.h"
 #include "linglong/api/dbus/v1/dbus_peer.h"
+#include "linglong/api/types/v1/Generators.hpp"
 #include "linglong/api/types/v1/InteractionReply.hpp"
 #include "linglong/api/types/v1/InteractionRequest.hpp"
 #include "linglong/api/types/v1/LinglongAPIV1.hpp"
@@ -23,6 +24,7 @@
 #include "linglong/api/types/v1/PackageManager1UninstallParameters.hpp"
 #include "linglong/api/types/v1/State.hpp"
 #include "linglong/api/types/v1/UpgradeListResult.hpp"
+#include "linglong/cdi/cdi.h"
 #include "linglong/cli/printer.h"
 #include "linglong/common/dir.h"
 #include "linglong/common/error.h"
@@ -38,6 +40,7 @@
 #include "linglong/utils/file.h"
 #include "linglong/utils/finally/finally.h"
 #include "linglong/utils/gettext.h"
+#include "linglong/utils/namespace.h"
 #include "linglong/utils/runtime_config.h"
 #include "linglong/utils/xdg/directory.h"
 #include "ocppi/runtime/ExecOption.hpp"
@@ -72,6 +75,8 @@
 using namespace linglong::utils::error;
 
 namespace {
+
+constexpr std::size_t ContainerIDDisplayLength = 12;
 
 std::vector<std::string> getAutoModuleList() noexcept
 {
@@ -347,9 +352,14 @@ void Cli::interaction(const QDBusObjectPath &object_path,
     LogD("action: {}", action);
 
     auto reply = api::types::v1::InteractionReply{ .action = action };
+    auto pkgMan = this->getPkgMan();
+    if (!pkgMan) {
+        this->printer.printErr(pkgMan.error());
+        return;
+    }
 
     QDBusPendingReply<void> dbusReply =
-      this->pkgMan.ReplyInteraction(object_path, common::serialize::toQVariantMap(reply));
+      (*pkgMan)->ReplyInteraction(object_path, common::serialize::toQVariantMap(reply));
     dbusReply.waitForFinished();
     if (dbusReply.isError()) {
         this->printer.printErr(
@@ -431,7 +441,7 @@ void Cli::printOnTaskSuccess()
 Cli::Cli(Printer &printer,
          ocppi::cli::CLI &ociCLI,
          runtime::ContainerBuilder &containerBuilder,
-         api::dbus::v1::PackageManager &pkgMan,
+         bool peerMode,
          repo::OSTreeRepo &repo,
          std::unique_ptr<InteractiveNotifier> &&notifier,
          QObject *parent)
@@ -441,46 +451,128 @@ Cli::Cli(Printer &printer,
     , containerBuilder(containerBuilder)
     , repository(repo)
     , notifier(std::move(notifier))
-    , pkgMan(pkgMan)
+    , peerMode(peerMode)
 {
-    auto conn = pkgMan.connection();
-    if (!conn.connect(pkgMan.service(),
-                      pkgMan.path(),
-                      pkgMan.interface(),
+}
+
+utils::error::Result<api::dbus::v1::PackageManager *> Cli::getPkgMan()
+{
+    LINGLONG_TRACE("get package manager");
+
+    if (this->pkgMan) {
+        return this->pkgMan.get();
+    }
+
+    if (this->peerMode) {
+        if (getuid() != 0) {
+            return LINGLONG_ERR("--no-dbus should only be used by root user.");
+        }
+
+        LogW("some subcommands will failed in --no-dbus mode.");
+        const auto pkgManAddress = QString("unix:path=/tmp/linglong-package-manager.socket");
+        QProcess::startDetached("sudo",
+                                { "--user",
+                                  LINGLONG_USERNAME,
+                                  "--preserve-env=QT_FORCE_STDERR_LOGGING",
+                                  "--preserve-env=QDBUS_DEBUG",
+                                  LINGLONG_LIBEXEC_DIR "/ll-package-manager",
+                                  "--no-dbus" });
+        using namespace std::chrono_literals;
+        std::this_thread::sleep_for(1s);
+
+        const auto &pkgManConn =
+          QDBusConnection::connectToPeer(pkgManAddress, "ll-package-manager");
+        if (!pkgManConn.isConnected()) {
+            return LINGLONG_ERR(fmt::format("Failed to connect to ll-package-manager: {}",
+                                            pkgManConn.lastError().message().toStdString()));
+        }
+
+        this->pkgMan =
+          std::make_unique<api::dbus::v1::PackageManager>("",
+                                                          "/org/deepin/linglong/PackageManager1",
+                                                          pkgManConn,
+                                                          QCoreApplication::instance());
+    } else {
+        const auto &pkgManConn = QDBusConnection::systemBus();
+
+        auto peer = linglong::api::dbus::v1::DBusPeer("org.deepin.linglong.PackageManager1",
+                                                      "/org/deepin/linglong/PackageManager1",
+                                                      pkgManConn);
+        auto reply = peer.Ping();
+        reply.waitForFinished();
+        if (!reply.isValid()) {
+            return LINGLONG_ERR(
+              fmt::format("Failed to activate org.deepin.linglong.PackageManager1: {}",
+                          reply.error().message().toStdString()));
+        }
+
+        this->pkgMan =
+          std::make_unique<api::dbus::v1::PackageManager>("org.deepin.linglong.PackageManager1",
+                                                          "/org/deepin/linglong/PackageManager1",
+                                                          pkgManConn,
+                                                          QCoreApplication::instance());
+    }
+
+    auto ret = this->initPkgManSignals();
+    if (!ret) {
+        this->pkgMan.reset();
+        return LINGLONG_ERR("failed to initialize package manager signals", ret.error());
+    }
+
+    return this->pkgMan.get();
+}
+
+utils::error::Result<void> Cli::initPkgManSignals()
+{
+    LINGLONG_TRACE("init package manager signals");
+
+    if (this->pkgManSignalsInitialized) {
+        return LINGLONG_OK;
+    }
+
+    auto pkgManRet = this->getPkgMan();
+    if (!pkgManRet) {
+        return LINGLONG_ERR(pkgManRet);
+    }
+    auto *pkgMan = *pkgManRet;
+
+    auto conn = pkgMan->connection();
+    if (!conn.connect(pkgMan->service(),
+                      pkgMan->path(),
+                      pkgMan->interface(),
                       "TaskAdd",
                       this,
                       SLOT(onTaskAdded(QDBusObjectPath)))) {
-        LogE("couldn't connect to package manager signal 'TaskAdded'");
+        return LINGLONG_ERR("couldn't connect to package manager signal 'TaskAdded'");
     }
 
-    if (!conn.connect(pkgMan.service(),
-                      pkgMan.path(),
-                      pkgMan.interface(),
+    if (!conn.connect(pkgMan->service(),
+                      pkgMan->path(),
+                      pkgMan->interface(),
                       "TaskRemoved",
                       this,
                       SLOT(onTaskRemoved(QDBusObjectPath)))) {
-        LogE("couldn't connect to package manager signal 'TaskRemoved'");
+        return LINGLONG_ERR("couldn't connect to package manager signal 'TaskRemoved'");
     }
+
+    this->pkgManSignalsInitialized = true;
+    return LINGLONG_OK;
 }
 
 int Cli::run(const RunOptions &options)
 {
     LINGLONG_TRACE("command run");
 
-    auto uid = getuid();
-    auto gid = getgid();
-    auto pid = getpid();
-
     detectDrivers();
 
-    auto userContainerDir = std::filesystem::path{ "/run/linglong" } / std::to_string(uid);
+    auto userContainerDir = std::filesystem::path{ "/run/linglong" } / std::to_string(getuid());
     if (auto ret = utils::ensureDirectory(userContainerDir); !ret) {
         this->printer.printErr(ret.error());
         return -1;
     }
 
     auto mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
-    auto pidFile = userContainerDir / std::to_string(pid);
+    auto pidFile = userContainerDir / std::to_string(getpid());
     // placeholder file
     auto fd = ::open(pidFile.c_str(), O_WRONLY | O_CREAT | O_EXCL, mode);
     if (fd == -1) {
@@ -531,6 +623,14 @@ int Cli::run(const RunOptions &options)
     if (runtimeConfig && runtimeConfig->extDefs) {
         opts.externalExtensionDefs = std::move(runtimeConfig->extDefs).value();
     }
+    if (!options.devices.empty()) {
+        auto cdiDevices = cdi::getCDIDevices(options.cdiSpecDir, options.devices);
+        if (!cdiDevices) {
+            handleCommonError(cdiDevices.error());
+            return -1;
+        }
+        opts.cdiDevices = std::move(*cdiDevices);
+    }
 
     // 调整日志输出，打印扩展列表（用逗号拼接）
     std::string extStr =
@@ -546,10 +646,11 @@ int Cli::run(const RunOptions &options)
         return -1;
     }
 
-    LogD("resolved run context with base {}", runContext.getBaseLayerPath()->string());
-    if (runContext.hasRuntime()) {
-        LogD("resolved run context with runtime {}", runContext.getRuntimeLayerPath()->string());
-    }
+    auto runContextCfg = runContext.getConfig();
+    LogD("RunContext Config:\n{}", nlohmann::json(runContextCfg).dump());
+
+    auto containerID = runContext.getContainerId();
+    LogD("run app: {} container id: {}", curAppRef->toString(), containerID);
 
     const auto &appLayerItem = runContext.getCachedAppItem();
     if (!appLayerItem) {
@@ -593,7 +694,7 @@ int Cli::run(const RunOptions &options)
     auto containers = getCurrentContainers().value_or(std::vector<api::types::v1::CliContainer>{});
     for (const auto &container : containers) {
         LogD("found running container: {}", container.package);
-        if (container.package != curAppRef->toString()) {
+        if (container.id != containerID || container.package != curAppRef->toString()) {
             continue;
         }
 
@@ -609,109 +710,142 @@ int Cli::run(const RunOptions &options)
         break;
     }
 
-    auto *homeEnv = ::getenv("HOME");
-    if (homeEnv == nullptr) {
-        LogE("Couldn't get HOME env.");
+    auto cacheRes = this->ensureCache(runContext);
+    if (!cacheRes) {
+        this->printer.printErr(LINGLONG_ERRV(cacheRes));
         return -1;
     }
 
-    runContext.enableSecurityContext(runtime::getDefaultSecurityContexts());
+    if (!dumpContainerInfo()) {
+        return -1;
+    }
 
-    linglong::generator::ContainerCfgBuilder cfgBuilder;
-    cfgBuilder.setAppId(curAppRef->id)
-      .setAnnotation(generator::ANNOTATION::LAST_PID, std::to_string(pid))
-      .addUIdMapping(uid, uid, 1)
-      .addGIdMapping(gid, gid, 1)
-      .bindDefault()
-      .bindDevNode()
-      .bindCgroup()
-      .bindXDGRuntime()
-      .bindUserGroup()
-      .bindRemovableStorageMounts()
-      .bindHostRoot()
-      .bindHostStatics()
-      .bindHome(homeEnv)
-      .enablePrivateDir()
-      .mapPrivate(std::string{ homeEnv } + "/.ssh", true)
-      .mapPrivate(std::string{ homeEnv } + "/.gnupg", true)
-      .bindIPC()
-      .forwardDefaultEnv()
-      .enableSelfAdjustingMount();
+    auto namespaceRes = linglong::utils::needRunInNamespace();
+    if (!namespaceRes) {
+        this->printer.printErr(namespaceRes.error());
+        return -1;
+    }
 
-    std::vector<std::string> capabilities;
-    // privileged mode shares host's user_namespace and add capabilities
-    if (options.privileged) {
-        if (uid != 0) {
-            this->printer.printMessage(_("privileged mode requires running as root"));
+    if (*namespaceRes) {
+        const auto qtArgs = QCoreApplication::arguments();
+        auto selfExe = linglong::utils::getSelfExe();
+        if (!selfExe) {
+            this->printer.printErr(selfExe.error());
             return -1;
         }
 
-        cfgBuilder.disableUserNamespace();
-        capabilities = { "CAP_CHOWN",    "CAP_DAC_OVERRIDE",     "CAP_FOWNER",     "CAP_FSETID",
-                         "CAP_KILL",     "CAP_NET_BIND_SERVICE", "CAP_SETFCAP",    "CAP_SETGID",
-                         "CAP_SETPCAP",  "CAP_SETUID",           "CAP_SYS_CHROOT", "CAP_NET_RAW",
-                         "CAP_NET_ADMIN" };
+        std::vector<std::string> args;
+        args.reserve(static_cast<std::size_t>(qtArgs.size()) + 2);
+        for (const auto &arg : qtArgs) {
+            args.emplace_back(arg.toStdString());
+        }
+        args[0] = std::move(*selfExe);
+
+        auto insertPos = std::find(args.begin(), args.end(), std::string{ "run" });
+        if (insertPos == args.end()) {
+            this->printer.printErr(LINGLONG_ERRV("failed to locate run subcommand"));
+            return -1;
+        }
+
+        auto contextJson = nlohmann::json(runContext.getConfig()).dump();
+        args.insert(insertPos + 1, { "--run-context", contextJson });
+
+        std::vector<char *> argPointers;
+        argPointers.reserve(args.size() + 1);
+        for (auto &arg : args) {
+            argPointers.push_back(arg.data());
+        }
+        argPointers.push_back(nullptr);
+
+        auto runRes = linglong::utils::runInNamespace(static_cast<int>(args.size()),
+                                                      argPointers.data(),
+                                                      geteuid(),
+                                                      getegid());
+        if (!runRes) {
+            this->printer.printErr(runRes.error());
+            return -1;
+        }
+
+        return *runRes;
     }
 
-    if (!options.capsAdd.empty()) {
-        capabilities.insert(capabilities.end(), options.capsAdd.begin(), options.capsAdd.end());
+    return this->runResolvedContext(runContext, options, std::move(runtimeConfig));
+}
+
+int Cli::runWithContext(const RunOptions &options)
+{
+    LINGLONG_TRACE("command run with context");
+
+    if (!options.runContext) {
+        this->printer.printErr(LINGLONG_ERRV("run context is required"));
+        return -1;
     }
 
-    cfgBuilder.setCapabilities(capabilities);
+    auto loaded = linglong::utils::loadRuntimeConfig(options.appid);
+    if (!loaded) {
+        this->printer.printErr(loaded.error());
+        return -1;
+    }
+    auto runtimeConfig = std::move(loaded).value();
 
-    res = runContext.fillContextCfg(cfgBuilder);
+    runtime::RunContext runContext(this->repository);
+    try {
+        auto cfg =
+          nlohmann::json::parse(*options.runContext).get<api::types::v1::RunContextConfig>();
+        auto res = runContext.resolve(cfg);
+        if (!res) {
+            this->printer.printErr(res.error());
+            return -1;
+        }
+    } catch (const std::exception &e) {
+        this->printer.printErr(
+          LINGLONG_ERRV(fmt::format("failed to parse run context: {}", e.what())));
+        return -1;
+    }
+
+    return this->runResolvedContext(runContext, options, std::move(runtimeConfig));
+}
+
+int Cli::runResolvedContext(runtime::RunContext &runContext,
+                            const RunOptions &options,
+                            std::optional<api::types::v1::RuntimeConfigure> runtimeConfig)
+{
+    LINGLONG_TRACE("run resolved context");
+
+    auto appLayerItem = runContext.getCachedAppItem();
+    if (!appLayerItem) {
+        this->printer.printErr(LINGLONG_ERRV("failed to get cached app item"));
+        return -1;
+    }
+
+    auto commands = options.commands;
+    if (options.commands.empty()) {
+        commands = appLayerItem->info.command.value_or(std::vector<std::string>{ "bash" });
+    }
+    commands = filePathMapping(commands, options);
+
+    auto appCache =
+      common::dir::getContainerCacheDir(appLayerItem->commit, runContext.getContainerId());
+
+    runtime::RunContainerOptions runOptions;
+    runOptions.enableSecurityContext(runtime::getDefaultSecurityContexts());
+    runOptions.common.containerCachePath = appCache;
+    if (runtimeConfig) {
+        auto runtimeConfigRes = runOptions.applyRuntimeConfig(*runtimeConfig);
+        if (!runtimeConfigRes) {
+            this->printer.printErr(runtimeConfigRes.error());
+            return -1;
+        }
+    }
+    auto res = runOptions.applyCliRunOptions(options);
     if (!res) {
         this->printer.printErr(res.error());
         return -1;
     }
 
-    std::error_code ec;
-    auto socketDir = cfgBuilder.getBundlePath() / "init";
-    std::filesystem::create_directories(socketDir, ec);
-    if (ec) {
-        this->printer.printErr(LINGLONG_ERRV(ec.message().c_str()));
-        return -1;
-    }
-
-    cfgBuilder.addExtraMount(
-      ocppi::runtime::config::types::Mount{ .destination = "/run/linglong/init",
-                                            .options = std::vector<std::string>{ "bind" },
-                                            .source = socketDir.string(),
-                                            .type = "bind" });
-
-    if (runtimeConfig && runtimeConfig->env) {
-        for (const auto &[key, value] : *runtimeConfig->env) {
-            cfgBuilder.appendEnv(key, value, true);
-        }
-    }
-
-    for (const auto &env : options.envs) {
-        auto split = env.cbegin() + env.find('='); // already checked by CLI
-        cfgBuilder.appendEnv(std::string(env.cbegin(), split),
-                             std::string(split + 1, env.cend()),
-                             true);
-    }
-
-    auto appCache = this->ensureCache(runContext, cfgBuilder);
-    if (!appCache) {
-        this->printer.printErr(LINGLONG_ERRV(appCache));
-        return -1;
-    }
-    cfgBuilder.setAppCache(*appCache).enableLDCache();
-
-    if (!cfgBuilder.build()) {
-        auto err = cfgBuilder.getError();
-        LogE("build cfg error: {}", err.reason);
-        return -1;
-    }
-
-    auto container = this->containerBuilder.create(cfgBuilder);
+    auto container = this->containerBuilder.createRunContainer(runContext, runOptions);
     if (!container) {
         this->printer.printErr(container.error());
-        return -1;
-    }
-
-    if (!dumpContainerInfo()) {
         return -1;
     }
 
@@ -725,6 +859,7 @@ int Cli::run(const RunOptions &options)
         }
         process.cwd = workdir;
     }
+
     ocppi::runtime::RunOption opt{};
     auto result = (*container)->run(process, opt);
     if (!result) {
@@ -739,19 +874,17 @@ int Cli::enter(const EnterOptions &options)
 {
     LINGLONG_TRACE("ll-cli exec");
     auto containerIDList = this->getRunningAppContainers(options.instance);
+    if (!containerIDList) {
+        this->printer.printErr(containerIDList.error());
+        return -1;
+    }
 
-    if (containerIDList.empty()) {
+    if (containerIDList->empty()) {
         this->printer.printErr(LINGLONG_ERRV("no container found"));
         return -1;
     }
 
-    if (containerIDList.size() > 1) {
-        this->printer.printErr(
-          LINGLONG_ERRV("multiple running containers found, please specify which one to enter"));
-        return -1;
-    }
-
-    auto containerID = containerIDList.front();
+    auto containerID = containerIDList->front();
     LogI("select container id: {}", containerID);
     auto commands = options.commands;
     if (commands.empty()) {
@@ -851,7 +984,7 @@ int Cli::ps()
     std::for_each(myContainers->begin(),
                   myContainers->end(),
                   [](api::types::v1::CliContainer &container) {
-                      container.id = container.id.substr(0, 12);
+                      container.id = container.id.substr(0, ContainerIDDisplayLength);
                   });
 
     this->printer.printContainers(*myContainers);
@@ -859,27 +992,55 @@ int Cli::ps()
     return 0;
 }
 
-std::vector<std::string> Cli::getRunningAppContainers(const std::string &appid)
+bool Cli::isContainerIDMatch(const std::string &containerID, const std::string &shortID)
+{
+    if (containerID == shortID) {
+        return true;
+    }
+
+    if (shortID.size() < ContainerIDDisplayLength) {
+        return false;
+    }
+
+    return common::strings::starts_with(containerID, shortID);
+}
+
+utils::error::Result<std::vector<std::string>> Cli::getRunningAppContainers(const std::string &id)
 {
     LINGLONG_TRACE("get app running containers");
 
     std::vector<std::string> containerIDList{};
     auto containers = getCurrentContainers();
     if (!containers) {
-        this->printer.printErr(containers.error());
-        return containerIDList;
+        return LINGLONG_ERR(containers);
     }
 
     for (const auto &container : *containers) {
-        auto fuzzyRef = package::FuzzyReference::parse(container.package);
-        if (!fuzzyRef) {
-            LogW("{}", fuzzyRef.error());
+        // first check if the id matches container id, then check if the id matches package appid or
+        // reference
+        if (isContainerIDMatch(container.id, id)) {
+            containerIDList.emplace_back(container.id);
             continue;
         }
 
-        if (fuzzyRef->id == appid || fuzzyRef->toString() == appid) {
+        auto ref = package::Reference::parse(container.package);
+        if (!ref) {
+            LogW("{}", ref.error());
+            continue;
+        }
+
+        if (ref->id == id || ref->toString() == id) {
             containerIDList.emplace_back(container.id);
         }
+    }
+
+    if (containerIDList.size() > 1) {
+        auto msg =
+          fmt::format("multiple running containers match the specified identifier '{}': {}. "
+                      "Please specify a more specific identifier.",
+                      id,
+                      containerIDList);
+        return LINGLONG_ERR(msg);
     }
 
     return containerIDList;
@@ -890,9 +1051,18 @@ int Cli::kill(const KillOptions &options)
     LINGLONG_TRACE("command kill");
 
     auto containerIDList = this->getRunningAppContainers(options.appid);
+    if (!containerIDList) {
+        this->printer.printErr(containerIDList.error());
+        return -1;
+    }
+
+    if (containerIDList->empty()) {
+        this->printer.printErr(LINGLONG_ERRV("no container found"));
+        return -1;
+    }
 
     auto ret = 0;
-    for (const auto &containerID : containerIDList) {
+    for (const auto &containerID : *containerIDList) {
         LogI("select container id {}", containerID);
         auto result = this->ociCLI.kill(ocppi::runtime::ContainerID(containerID),
                                         ocppi::runtime::Signal(options.signal));
@@ -963,10 +1133,15 @@ int Cli::installFromFile(const QFileInfo &fileInfo,
 
     QDBusUnixFileDescriptor dbusFileDescriptor(file.handle());
 
-    auto pendingReply =
-      this->pkgMan.InstallFromFile(dbusFileDescriptor,
-                                   fileInfo.suffix(),
-                                   common::serialize::toQVariantMap(commonOptions));
+    auto pkgMan = this->getPkgMan();
+    if (!pkgMan) {
+        this->printer.printErr(pkgMan.error());
+        return -1;
+    }
+
+    auto pendingReply = (*pkgMan)->InstallFromFile(dbusFileDescriptor,
+                                                   fileInfo.suffix(),
+                                                   common::serialize::toQVariantMap(commonOptions));
     res = waitTaskCreated(pendingReply, TaskType::InstallFromFile);
     if (!res) {
         this->handleCommonError(res.error());
@@ -1032,7 +1207,13 @@ int Cli::install(const InstallOptions &options)
 
     LogD("install module: {}", common::strings::join(*params.package.modules));
 
-    auto pendingReply = this->pkgMan.Install(common::serialize::toQVariantMap(params));
+    auto pkgMan = this->getPkgMan();
+    if (!pkgMan) {
+        this->printer.printErr(pkgMan.error());
+        return -1;
+    }
+
+    auto pendingReply = (*pkgMan)->Install(common::serialize::toQVariantMap(params));
     auto res = waitTaskCreated(pendingReply, TaskType::Install);
     if (!res) {
         handleInstallError(res.error(), params);
@@ -1097,7 +1278,13 @@ int Cli::upgrade(const UpgradeOptions &options)
         params.packages.emplace_back(std::move(package));
     }
 
-    auto pendingReply = this->pkgMan.Update(common::serialize::toQVariantMap(params));
+    auto pkgMan = this->getPkgMan();
+    if (!pkgMan) {
+        this->printer.printErr(pkgMan.error());
+        return -1;
+    }
+
+    auto pendingReply = (*pkgMan)->Update(common::serialize::toQVariantMap(params));
     auto res = waitTaskCreated(pendingReply, TaskType::Upgrade);
     if (!res) {
         handleUpgradeError(res.error());
@@ -1148,8 +1335,14 @@ int Cli::search(const SearchOptions &options)
     std::optional<QString> pendingJobID;
 
     QEventLoop loop;
+    auto pkgMan = this->getPkgMan();
+    if (!pkgMan) {
+        this->printer.printErr(pkgMan.error());
+        return -1;
+    }
+
     connect(
-      &this->pkgMan,
+      *pkgMan,
       &api::dbus::v1::PackageManager::SearchFinished,
       [&pendingJobID, this, &loop, &options](const QString &jobID, const QVariantMap &data) {
           LINGLONG_TRACE("process search result");
@@ -1223,7 +1416,7 @@ int Cli::search(const SearchOptions &options)
           loop.exit(0);
       });
 
-    auto pendingReply = this->pkgMan.Search(common::serialize::toQVariantMap(params));
+    auto pendingReply = (*pkgMan)->Search(common::serialize::toQVariantMap(params));
     auto result = waitDBusReply<api::types::v1::PackageManager1JobInfo>(pendingReply);
     if (!result) {
         this->printer.printErr(result.error());
@@ -1247,7 +1440,13 @@ int Cli::prune()
 
     QEventLoop loop;
     QString jobIDReply = "";
-    connect(&this->pkgMan,
+    auto pkgMan = this->getPkgMan();
+    if (!pkgMan) {
+        this->printer.printErr(pkgMan.error());
+        return -1;
+    }
+
+    connect(*pkgMan,
             &api::dbus::v1::PackageManager::PruneFinished,
             [this, &loop, &jobIDReply](const QString &jobID, const QVariantMap &data) {
                 LINGLONG_TRACE("process prune result");
@@ -1273,7 +1472,7 @@ int Cli::prune()
                 loop.exit(0);
             });
 
-    auto pendingReply = this->pkgMan.Prune();
+    auto pendingReply = (*pkgMan)->Prune();
     auto result = waitDBusReply<api::types::v1::PackageManager1JobInfo>(pendingReply);
     if (!result) {
         this->printer.printErr(result.error());
@@ -1316,7 +1515,13 @@ int Cli::uninstall(const UninstallOptions &options)
         params.package.packageManager1PackageModule = options.module;
     }
 
-    auto pendingReply = this->pkgMan.Uninstall(common::serialize::toQVariantMap(params));
+    auto pkgMan = this->getPkgMan();
+    if (!pkgMan) {
+        this->printer.printErr(pkgMan.error());
+        return -1;
+    }
+
+    auto pendingReply = (*pkgMan)->Uninstall(common::serialize::toQVariantMap(params));
     auto res = waitTaskCreated(pendingReply, TaskType::Uninstall);
     if (!res) {
         this->handleUninstallError(res.error());
@@ -1393,9 +1598,15 @@ int Cli::repo(CLI::App *app, const RepoOptions &options)
 {
     LINGLONG_TRACE("command repo");
 
-    auto propCfg = this->pkgMan.configuration();
-    if (this->pkgMan.lastError().isValid()) {
-        auto err = LINGLONG_ERRV(this->pkgMan.lastError().message().toStdString());
+    auto pkgMan = this->getPkgMan();
+    if (!pkgMan) {
+        this->printer.printErr(pkgMan.error());
+        return -1;
+    }
+
+    auto propCfg = (*pkgMan)->configuration();
+    if ((*pkgMan)->lastError().isValid()) {
+        auto err = LINGLONG_ERRV((*pkgMan)->lastError().message().toStdString());
         this->printer.printErr(err);
         return -1;
     }
@@ -1555,9 +1766,15 @@ int Cli::setRepoConfig(const QVariantMap &config)
         return -1;
     }
 
-    this->pkgMan.setConfiguration(config);
-    if (this->pkgMan.lastError().isValid()) {
-        auto err = LINGLONG_ERRV(this->pkgMan.lastError().message().toStdString());
+    auto pkgMan = this->getPkgMan();
+    if (!pkgMan) {
+        this->printer.printErr(pkgMan.error());
+        return -1;
+    }
+
+    (*pkgMan)->setConfiguration(config);
+    if ((*pkgMan)->lastError().isValid()) {
+        auto err = LINGLONG_ERRV((*pkgMan)->lastError().message().toStdString());
         this->printer.printErr(err);
         return -1;
     }
@@ -1678,7 +1895,7 @@ int Cli::content(const ContentOptions &options)
 
     QDirIterator it(entriesDir.absolutePath(),
                     QDir::AllEntries | QDir::NoDot | QDir::NoDotDot | QDir::System,
-                    QDirIterator::Subdirectories);
+                    QDirIterator::Subdirectories | QDirIterator::FollowSymlinks);
     while (it.hasNext()) {
         it.next();
         const auto entryPath = it.fileInfo().absoluteFilePath();
@@ -1963,153 +2180,70 @@ QDBusReply<void> Cli::authorization()
 {
     // Note: we have marked the method Permissions of PM as rejected.
     // Use this method to determin that this client whether have permission to call PM.
-    return this->pkgMan.Permissions();
+    auto pkgMan = this->getPkgMan();
+    if (!pkgMan) {
+        return QDBusReply<void>{ QDBusError(QDBusError::Failed, pkgMan.error().message().c_str()) };
+    }
+
+    return (*pkgMan)->Permissions();
 }
 
-utils::error::Result<void> Cli::generateLDCache(runtime::RunContext &runContext,
-                                                const std::string &ldConf) noexcept
+utils::error::Result<std::filesystem::path> Cli::ensureCache(runtime::RunContext &context) noexcept
 {
-    LINGLONG_TRACE("generate ld cache");
+    LINGLONG_TRACE("ensure cache via PM");
 
-    auto appLayerItem = runContext.getCachedAppItem();
+    const auto &containerID = context.getContainerId();
+    auto appLayerItem = context.getCachedAppItem();
     if (!appLayerItem) {
-        return LINGLONG_ERR(appLayerItem);
+        return LINGLONG_ERR("failed to get cached app item");
     }
 
-    auto appLayer = runContext.getAppLayer();
-    if (!appLayer) {
-        return LINGLONG_ERR("app layer not found");
-    }
-    auto appRef = appLayer->getReference();
-
-    auto appCache = common::dir::getUserCacheDir() / appLayerItem->commit;
+    auto appCache = common::dir::getContainerCacheDir(appLayerItem->commit, containerID);
+    auto runContextConfigFile = appCache / ".config";
     std::error_code ec;
-    std::filesystem::create_directories(appCache, ec);
+    if (std::filesystem::exists(runContextConfigFile, ec)) {
+        return appCache;
+    }
     if (ec) {
-        return LINGLONG_ERR(fmt::format("failed to create cache directory {}: ", appCache), ec);
+        return LINGLONG_ERR(fmt::format("failed to check {}", runContextConfigFile), ec);
     }
 
-    generator::ContainerCfgBuilder cfgBuilder;
-    auto res = runContext.fillContextCfg(cfgBuilder, ".ldcache");
-    if (!res) {
-        return LINGLONG_ERR(res);
+    std::optional<QString> pendingJobID;
+    bool success = false;
+    QEventLoop loop;
+    auto pkgMan = this->getPkgMan();
+    if (!pkgMan) {
+        return LINGLONG_ERR(pkgMan);
     }
 
-    auto uid = getuid();
-    auto gid = getgid();
-
-    std::filesystem::path ldConfPath{ appCache / "ld.so.conf" };
-
-    cfgBuilder.setAppId(appRef.id)
-      .setAppCache(appCache, false)
-      .addUIdMapping(uid, uid, 1)
-      .addGIdMapping(gid, gid, 1)
-      .bindDefault()
-      .bindCgroup()
-      .bindXDGRuntime()
-      .bindUserGroup()
-      .forwardDefaultEnv()
-      .addExtraMounts(
-        std::vector<ocppi::runtime::config::types::Mount>{ ocppi::runtime::config::types::Mount{
-          .destination = "/etc/ld.so.conf.d/zz_deepin-linglong-app.conf",
-          .options = { { "rbind", "ro" } },
-          .source = ldConfPath,
-          .type = "bind",
-        } })
-      .enableSelfAdjustingMount();
-
-    // generate ld config
-    {
-        std::ofstream ofs(ldConfPath, std::ios::binary | std::ios::out | std::ios::trunc);
-        Q_ASSERT(ofs.is_open());
-        if (!ofs.is_open()) {
-            return LINGLONG_ERR("create ld config in bundle directory");
-        }
-        ofs << ldConf;
+    if (QObject::connect(*pkgMan,
+                         &api::dbus::v1::PackageManager::InitRunContextFinished,
+                         &loop,
+                         [&success, &loop, &pendingJobID](const QString &taskID, bool taskSuccess) {
+                             if (!pendingJobID || taskID != pendingJobID) {
+                                 return;
+                             }
+                             success = taskSuccess;
+                             loop.quit();
+                         })
+        == nullptr) {
+        return LINGLONG_ERR("failed to connect InitRunContextFinished signal");
     }
 
-    if (!cfgBuilder.build()) {
-        auto err = cfgBuilder.getError();
-        return LINGLONG_ERR("build cfg error: " + err.reason);
+    auto cfgJson = nlohmann::json(context.getConfig()).dump();
+    auto reply = (*pkgMan)->InitRunContext(QString::fromStdString(cfgJson),
+                                           QString::fromStdString(containerID));
+    QDBusPendingReply<QVariantMap> pendingReply = reply;
+    auto resultRet = waitDBusReply<api::types::v1::PackageManager1JobInfo>(pendingReply);
+    if (!resultRet) {
+        return LINGLONG_ERR(resultRet);
     }
+    pendingJobID = QString::fromStdString(resultRet->id);
 
-    auto container = this->containerBuilder.create(cfgBuilder);
-    if (!container) {
-        return LINGLONG_ERR(container);
-    }
+    loop.exec();
 
-    ocppi::runtime::config::types::Process process{};
-    process.cwd = "/";
-    process.noNewPrivileges = true;
-    process.terminal = true;
-    process.args =
-      std::vector<std::string>{ "/sbin/ldconfig", "-X", "-C", "/run/linglong/cache/ld.so.cache" };
-
-    ocppi::runtime::RunOption opt{};
-    auto result = (*container)->run(process, opt);
-    if (!result) {
-        return LINGLONG_ERR(result);
-    }
-
-    return LINGLONG_OK;
-}
-
-utils::error::Result<std::filesystem::path> Cli::ensureCache(
-  runtime::RunContext &runContext, const generator::ContainerCfgBuilder &cfgBuilder) noexcept
-{
-    LINGLONG_TRACE("ensure cache");
-
-    auto appLayerItem = runContext.getCachedAppItem();
-    if (!appLayerItem) {
-        return LINGLONG_ERR(appLayerItem);
-    }
-
-    auto appLayer = runContext.getAppLayer();
-    if (!appLayer) {
-        return LINGLONG_ERR("app layer not found");
-    }
-    auto appRef = appLayer->getReference();
-
-    auto appCache = common::dir::getUserCacheDir() / appLayerItem->commit;
-    bool ldCacheGen = true;
-    auto ldConf = cfgBuilder.ldConf(appRef.arch.getTriplet());
-
-    do {
-        std::error_code ec;
-        if (!std::filesystem::exists(appCache, ec)) {
-            break;
-        }
-
-        // check ld.so.conf
-        {
-            auto ldSoConf = appCache / "ld.so.conf";
-            if (!std::filesystem::exists(ldSoConf, ec)
-                || !std::filesystem::exists(appCache / "ld.so.cache")) {
-                break;
-            }
-
-            // If the ld.so.conf exists, check if it is consistent with the current configuration.
-            std::stringstream oldCache;
-            std::ifstream ifs(ldSoConf, std::ios::binary | std::ios::in);
-            if (!ifs.is_open()) {
-                return LINGLONG_ERR("failed to open " + ldSoConf.string());
-            }
-            oldCache << ifs.rdbuf();
-            LogD("ld.so.conf: {}", ldConf);
-            LogD("old ld.so.conf: {}", oldCache.str());
-            if (oldCache.str() != ldConf) {
-                break;
-            }
-
-            ldCacheGen = false;
-        }
-    } while (false);
-
-    if (ldCacheGen) {
-        auto res = generateLDCache(runContext, ldConf);
-        if (!res) {
-            return LINGLONG_ERR("failed to generate ld cache", res);
-        }
+    if (!success) {
+        return LINGLONG_ERR("InitRunContext failed", utils::error::ErrorCode::Failed);
     }
 
     return appCache;
@@ -2191,7 +2325,7 @@ int Cli::getLayerDir(const InspectOptions &options)
         return -1;
     }
 
-    std::cout << layerDir->path() << std::endl;
+    std::cout << layerDir->path().string() << std::endl;
 
     return 0;
 }
@@ -2201,20 +2335,17 @@ int Cli::getBundleDir(const InspectOptions &options)
     LINGLONG_TRACE("Get Bundle dir");
 
     auto containerIDList = getRunningAppContainers(options.appid);
+    if (!containerIDList) {
+        this->printer.printErr(containerIDList.error());
+        return -1;
+    }
 
-    if (containerIDList.empty()) {
+    if (containerIDList->empty()) {
         this->printer.printErr(LINGLONG_ERRV("Can not find the running application."));
         return -1;
     }
 
-    if (containerIDList.size() > 1) {
-        this->printer.printErr(
-          LINGLONG_ERRV("Found multiple running containers for the application, please specify "
-                        "the container ID to inspect."));
-        return -1;
-    }
-
-    auto bundleDir = linglong::common::dir::getBundleDir(containerIDList.front());
+    auto bundleDir = linglong::common::dir::getBundleDir(containerIDList->front());
 
     std::cout << bundleDir.string() << std::endl;
 
@@ -2225,10 +2356,15 @@ utils::error::Result<void> Cli::initInteraction()
 {
     LINGLONG_TRACE("initInteraction");
 
-    auto conn = this->pkgMan.connection();
-    auto con = conn.connect(this->pkgMan.service(),
-                            this->pkgMan.path(),
-                            this->pkgMan.interface(),
+    auto pkgMan = this->getPkgMan();
+    if (!pkgMan) {
+        return LINGLONG_ERR(pkgMan);
+    }
+
+    auto conn = (*pkgMan)->connection();
+    auto con = conn.connect((*pkgMan)->service(),
+                            (*pkgMan)->path(),
+                            (*pkgMan)->interface(),
                             "RequestInteraction",
                             this,
                             SLOT(interaction(QDBusObjectPath, int, QVariantMap)));
@@ -2254,15 +2390,20 @@ utils::error::Result<void> Cli::waitTaskCreated(QDBusPendingReply<QVariantMap> &
         return LINGLONG_ERR(result->message, result->code);
     }
 
-    auto conn = pkgMan.connection();
+    auto pkgMan = this->getPkgMan();
+    if (!pkgMan) {
+        return LINGLONG_ERR(pkgMan);
+    }
+
+    auto conn = (*pkgMan)->connection();
     this->taskObjectPath = QString::fromStdString(result->taskObjectPath.value());
-    this->task = new api::dbus::v1::Task1(pkgMan.service(), taskObjectPath, conn);
+    this->task = new api::dbus::v1::Task1((*pkgMan)->service(), taskObjectPath, conn);
     this->taskState.state = linglong::api::types::v1::State::Queued;
     this->taskState.taskType = taskType;
 
     LogD("task object path: {}", this->taskObjectPath.toStdString());
 
-    if (!conn.connect(pkgMan.service(),
+    if (!conn.connect((*pkgMan)->service(),
                       taskObjectPath,
                       "org.freedesktop.DBus.Properties",
                       "PropertiesChanged",

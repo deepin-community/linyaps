@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2024 UnionTech Software Technology Co., Ltd.
+ * SPDX-FileCopyrightText: 2024 - 2026 UnionTech Software Technology Co., Ltd.
  *
  * SPDX-License-Identifier: LGPL-3.0-or-later
  */
@@ -18,71 +18,47 @@
 
 namespace linglong::repo {
 
-utils::error::Result<std::unique_ptr<RepoCache>>
-RepoCache::create(const std::filesystem::path &cacheFile,
-                  const api::types::v1::RepoConfigV2 &repoConfig,
-                  OstreeRepo &repo)
+RepoCache::RepoCache(std::filesystem::path cacheFile)
+    : cacheFile(std::move(cacheFile))
 {
-    LINGLONG_TRACE("load from RepoCache");
-
-    struct enableMaker : public RepoCache
-    {
-        using RepoCache::RepoCache;
-    };
-
-    // making the constructor of RepoCache be public within this function
-    // see also: https://seanmiddleditch.github.io/enabling-make-unique-with-private-constructors
-    auto repoCache = std::make_unique<enableMaker>();
-    repoCache->cacheFile = cacheFile;
-    std::error_code ec;
-    if (!std::filesystem::exists(repoCache->cacheFile, ec)) {
-        if (ec) {
-            return LINGLONG_ERR("checking file existence failed", ec);
-        }
-
-        auto ret = repoCache->rebuildCache(repoConfig, repo);
-        if (!ret) {
-            return LINGLONG_ERR(ret);
-        }
-        return repoCache;
-    }
-
-    auto result =
-      utils::serialize::LoadJSONFile<api::types::v1::RepositoryCache>(repoCache->cacheFile);
-    if (!result) {
-        std::cout << "invalid cache file, rebuild cache..." << std::endl;
-        auto ret = repoCache->rebuildCache(repoConfig, repo);
-        if (!ret) {
-            return LINGLONG_ERR(ret);
-        }
-        return repoCache;
-    }
-
-    repoCache->cache = std::move(result).value();
-    if (repoCache->cache.version != enableMaker::cacheFileVersion
-        || repoCache->cache.llVersion != LINGLONG_VERSION) {
-        std::cerr << "The existing cache is outdated, cache version: " << repoCache->cache.llVersion
-                  << ", ll version: " << LINGLONG_VERSION << ", rebuild cache..." << std::endl;
-        auto ret = repoCache->rebuildCache(repoConfig, repo);
-        if (!ret) {
-            return LINGLONG_ERR(ret);
-        }
-        return repoCache;
-    }
-
-    // update repo config
-    repoCache->cache.config = repoConfig;
-    return repoCache;
+    this->cache.llVersion = LINGLONG_VERSION;
+    this->cache.version = cacheFileVersion;
 }
 
-utils::error::Result<void> RepoCache::rebuildCache(const api::types::v1::RepoConfigV2 &repoConfig,
-                                                   OstreeRepo &repo) noexcept
+utils::error::Result<void> RepoCache::load()
+{
+    LINGLONG_TRACE("load repo cache");
+
+    std::error_code ec;
+    if (!std::filesystem::exists(this->cacheFile, ec)) {
+        if (ec) {
+            return LINGLONG_ERR("checking cache file existence failed", ec);
+        }
+        return LINGLONG_ERR("cache file does not exist");
+    }
+
+    auto result = utils::serialize::LoadJSONFile<api::types::v1::RepositoryCache>(this->cacheFile);
+    if (!result) {
+        return LINGLONG_ERR(fmt::format("failed to load cache file: {}", result.error()));
+    }
+
+    if (result->version != cacheFileVersion) {
+        return LINGLONG_ERR(
+          fmt::format("cache version mismatch: cache version {}, expected version {}",
+                      result->version,
+                      cacheFileVersion));
+    }
+    this->cache = std::move(result).value();
+
+    return LINGLONG_OK;
+}
+
+utils::error::Result<void> RepoCache::rebuild(const api::types::v1::RepoConfigV2 &repoConfig,
+                                              OstreeRepo &repo) noexcept
 {
     LINGLONG_TRACE("rebuild repo cache");
 
-    this->cache.llVersion = LINGLONG_VERSION;
     this->cache.config = repoConfig;
-    this->cache.version = cacheFileVersion;
     this->cache.layers.clear();
 
     g_autoptr(GHashTable) refsTable = nullptr;
@@ -128,7 +104,8 @@ utils::error::Result<void> RepoCache::rebuildCache(const api::types::v1::RepoCon
         g_clear_error(&gErr);
         g_autofree gchar *content = nullptr;
         if (!g_file_load_contents(infoFile, nullptr, &content, nullptr, nullptr, &gErr)) {
-            return LINGLONG_ERR(fmt::format("g_file_load_contents: {}", ptr_view(gErr)));
+            LogE("skip broken ref {}, failed to load info.json: {}", ref, ptr_view(gErr));
+            continue;
         }
         auto info = utils::serialize::parsePackageInfo(content);
         if (!info) {
@@ -138,12 +115,6 @@ utils::error::Result<void> RepoCache::rebuildCache(const api::types::v1::RepoCon
 
         item.info = std::move(info).value();
         this->cache.layers.emplace_back(std::move(item));
-    }
-
-    // FIXME: ll-cli may initialize repo, it can make states.json own by root
-    if (getuid() == 0) {
-        LogE("Rebuild the cache by root, skip to write data to states.json");
-        return LINGLONG_OK;
     }
 
     auto ret = writeToDisk();

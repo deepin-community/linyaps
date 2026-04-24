@@ -1,10 +1,9 @@
 /*
- * SPDX-FileCopyrightText: 2022 UnionTech Software Technology Co., Ltd.
+ * SPDX-FileCopyrightText: 2022 - 2026 UnionTech Software Technology Co., Ltd.
  *
  * SPDX-License-Identifier: LGPL-3.0-or-later
  */
 #include "configure.h"
-#include "linglong/api/dbus/v1/dbus_peer.h"
 #include "linglong/cli/cli.h"
 #include "linglong/cli/cli_printer.h"
 #include "linglong/cli/dbus_notifier.h"
@@ -24,12 +23,13 @@
 #include <CLI/CLI.hpp>
 #include <sys/file.h>
 
+#include <QDBusMetaType>
+#include <QDBusObjectPath>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QtGlobal>
 
 #include <algorithm>
-#include <cstddef>
 #include <functional>
 #include <memory>
 #include <string_view>
@@ -44,26 +44,6 @@ using namespace linglong::package;
 using namespace linglong::cli;
 
 namespace {
-
-void startProcess(const QString &program, const QStringList &args = {})
-{
-    QProcess process;
-    auto envs = process.environment();
-    envs.push_back("QT_FORCE_STDERR_LOGGING=1");
-    process.setEnvironment(envs);
-    process.setProgram(program);
-    process.setArguments(args);
-
-    qint64 pid = 0;
-    process.startDetached(&pid);
-
-    LogD("start {} {} as {}", program.toStdString(), args.join(" ").toStdString(), pid);
-
-    QObject::connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, [pid]() {
-        LogD("kill {}", pid);
-        kill(pid, SIGTERM);
-    });
-}
 
 std::vector<std::string> transformOldExec(int argc, char **argv) noexcept
 {
@@ -192,6 +172,8 @@ ll-cli run org.deepin.demo -- bash -x /path/to/bash/script)"));
       ->delimiter(',')          // 支持以逗号分隔
       ->allow_extra_args(false) // 避免吞掉后面的参数
       ->check(validatorString);
+    cliRun->add_option("--run-context", runOptions.runContext, _("Run context json string"))
+      ->group("");
     cliRun
       ->add_flag("--privileged", runOptions.privileged, _("Run the application in privileged mode"))
       ->group("");
@@ -199,6 +181,13 @@ ll-cli run org.deepin.demo -- bash -x /path/to/bash/script)"));
       ->delimiter(',')
       ->allow_extra_args(false)
       ->group("");
+    cliRun->add_option("--cdi-spec-dir", runOptions.cdiSpecDir, _("CDI spec directory"))
+      ->delimiter(',')
+      ->capture_default_str()
+      ->allow_extra_args(false);
+    cliRun->add_option("--device", runOptions.devices, _("Add CDI devices"))
+      ->delimiter(',')
+      ->allow_extra_args(false);
     cliRun->add_option("COMMAND", runOptions.commands, _("Run commands in a running sandbox"));
 }
 
@@ -594,29 +583,6 @@ void addInspectCommand(CLI::App &commandParser,
 
 } // namespace
 
-// 初始化仓库
-linglong::utils::error::Result<linglong::repo::OSTreeRepo *> initOSTreeRepo()
-{
-    LINGLONG_TRACE("initOSTreeRepo");
-    // load repo config
-    auto repoConfig = linglong::repo::loadConfig(
-      { LINGLONG_ROOT "/config.yaml", LINGLONG_DATA_DIR "/config.yaml" });
-    if (!repoConfig) {
-        return LINGLONG_ERR("load repo config failed", repoConfig);
-    }
-
-    // check repo root
-    auto repoRoot = QDir(LINGLONG_ROOT);
-    if (!repoRoot.exists()) {
-        return LINGLONG_ERR("repo root doesn't exist" + repoRoot.absolutePath().toStdString());
-    }
-
-    // create repo
-    auto repo = new linglong::repo::OSTreeRepo(repoRoot, std::move(*repoConfig));
-    repo->setParent(QCoreApplication::instance());
-    return repo;
-}
-
 int runCliApplication(int argc, char **mainArgv)
 {
     CLI::App commandParser{ _(
@@ -734,56 +700,6 @@ You can report bugs to the linyaps team under this project: https://github.com/O
         break;
     }
 
-    // connect to package manager
-    auto pkgManConn = QDBusConnection::systemBus();
-    auto *pkgMan =
-      new linglong::api::dbus::v1::PackageManager("org.deepin.linglong.PackageManager1",
-                                                  "/org/deepin/linglong/PackageManager1",
-                                                  pkgManConn,
-                                                  QCoreApplication::instance());
-    // if --no-dbus flag is set, start package manager in sudo mode
-    if (*noDBusFlag) {
-        if (getuid() != 0) {
-            LogE("--no-dbus should only be used by root user.");
-            return -1;
-        }
-
-        LogW("some subcommands will failed in --no-dbus mode.");
-        const auto pkgManAddress = QString("unix:path=/tmp/linglong-package-manager.socket");
-        startProcess("sudo",
-                     { "--user",
-                       LINGLONG_USERNAME,
-                       "--preserve-env=QT_FORCE_STDERR_LOGGING",
-                       "--preserve-env=QDBUS_DEBUG",
-                       LINGLONG_LIBEXEC_DIR "/ll-package-manager",
-                       "--no-dbus" });
-        QThread::sleep(1);
-
-        pkgManConn = QDBusConnection::connectToPeer(pkgManAddress, "ll-package-manager");
-        if (!pkgManConn.isConnected()) {
-            LogE("Failed to connect to ll-package-manager: {}",
-                 pkgManConn.lastError().message().toStdString());
-            return -1;
-        }
-
-        pkgMan = new linglong::api::dbus::v1::PackageManager("",
-                                                             "/org/deepin/linglong/PackageManager1",
-                                                             pkgManConn,
-                                                             QCoreApplication::instance());
-    } else {
-        // ping package manager to make it initialize system linglong repository
-        auto peer = linglong::api::dbus::v1::DBusPeer("org.deepin.linglong.PackageManager1",
-                                                      "/org/deepin/linglong/PackageManager1",
-                                                      pkgManConn);
-        auto reply = peer.Ping();
-        reply.waitForFinished();
-        if (!reply.isValid()) {
-            LogE("Failed to activate org.deepin.linglong.PackageManager1: {}",
-                 reply.error().message().toStdString());
-            return -1;
-        }
-    }
-
     // create printer
     std::unique_ptr<Printer> printer;
     if (*jsonFlag) {
@@ -812,8 +728,7 @@ You can report bugs to the linyaps team under this project: https://github.com/O
     }
 
     // create container builder
-    auto *containerBuilder = new linglong::runtime::ContainerBuilder(**ociRuntime);
-    containerBuilder->setParent(QCoreApplication::instance());
+    auto containerBuilder = std::make_unique<linglong::runtime::ContainerBuilder>(**ociRuntime);
 
     // create notifier
     std::unique_ptr<InteractiveNotifier> notifier{ nullptr };
@@ -834,16 +749,18 @@ You can report bugs to the linyaps team under this project: https://github.com/O
         LogW("Using DummyNotifier, expected interactions and prompts will not be displayed.");
         notifier = std::make_unique<linglong::cli::DummyNotifier>();
     }
-    auto repo = initOSTreeRepo();
+
+    const bool peerMode = noDBusFlag->count() > 0;
+    auto repo = linglong::repo::OSTreeRepo::loadFromPath(LINGLONG_ROOT);
     if (!repo.has_value()) {
-        LogE("initOSTreeRepo failed: {}", repo.error());
+        LogE("failed to load repo: {}", repo.error());
         return -1;
     }
     // create cli
     auto *cli = new linglong::cli::Cli(*printer,
                                        **ociRuntime,
                                        *containerBuilder,
-                                       *pkgMan,
+                                       peerMode,
                                        **repo,
                                        std::move(notifier),
                                        QCoreApplication::instance());
@@ -876,7 +793,11 @@ You can report bugs to the linyaps team under this project: https://github.com/O
     int result = -1;
     // call corresponding function according to subcommand name and pass corresponding options
     if (name == "run") {
-        result = cli->run(runOptions);
+        if (runOptions.runContext) {
+            result = cli->runWithContext(runOptions);
+        } else {
+            result = cli->run(runOptions);
+        }
     } else if (name == "enter") {
         result = cli->enter(enterOptions);
     } else if (name == "ps") {
@@ -914,6 +835,8 @@ You can report bugs to the linyaps team under this project: https://github.com/O
 
 int main(int argc, char **argv)
 {
+    qDBusRegisterMetaType<QDBusObjectPath>();
+
     // bind text domain
     bindtextdomain(PACKAGE_LOCALE_DOMAIN, PACKAGE_LOCALE_DIR);
     // text domain
