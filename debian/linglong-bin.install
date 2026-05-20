@@ -1,6 +1,7 @@
 debian/sysctl.d/linglong.conf usr/lib/sysctl.d/
 etc/X11/Xsession.d/21linglong
 etc/profile.d/linglong.sh
+etc/linglong/config.json
 usr/bin/ll-cli
 usr/bin/llpkg
 usr/lib/linglong/*
