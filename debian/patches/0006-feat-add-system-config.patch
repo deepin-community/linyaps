@@ -1,14 +1,8 @@
-Index: linyaps/misc/CMakeLists.txt
-===================================================================
---- linyaps.orig/misc/CMakeLists.txt
-+++ linyaps/misc/CMakeLists.txt
-@@ -1,4 +1,4 @@
--# SPDX-FileCopyrightText: 2023 - 2026 UnionTech Software Technology Co., Ltd.
-+# SPDX-FileCopyrightText: 2023 - 2026 UnionTech Software Technology Co., Ltd.
- #
- # SPDX-License-Identifier: LGPL-3.0-or-later
- 
-@@ -51,7 +51,8 @@ configure_files(
+diff --git a/misc/CMakeLists.txt b/misc/CMakeLists.txt
+index 2a5046ac..d5dd7a7d 100644
+--- a/misc/CMakeLists.txt
++++ b/misc/CMakeLists.txt
+@@ -50,7 +50,8 @@ configure_files(
    share/mime/packages/vnd.linyaps.uab.xml
    share/polkit-1/actions/org.deepin.linglong.PackageManager1.policy
    share/icons/linyaps.svg
@@ -18,7 +12,7 @@ Index: linyaps/misc/CMakeLists.txt
  
  # bash-completion
  set(BASH_COMPLETIONS_DIR ${CMAKE_INSTALL_DATADIR}/bash-completion)
-@@ -179,6 +180,10 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR
+@@ -178,6 +179,10 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/share/icons/linyaps.svg
  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/script/linglong.sh
          DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/profile.d)
  
@@ -29,10 +23,11 @@ Index: linyaps/misc/CMakeLists.txt
  install(
    FILES ${CMAKE_CURRENT_BINARY_DIR}/script/linglong.sh
    DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/X11/Xsession.d/
-Index: linyaps/misc/etc/linglong/config.json
-===================================================================
+diff --git a/misc/etc/linglong/config.json b/misc/etc/linglong/config.json
+new file mode 100644
+index 00000000..b85829c5
 --- /dev/null
-+++ linyaps/misc/etc/linglong/config.json
++++ b/misc/etc/linglong/config.json
 @@ -0,0 +1,5 @@
 +{
 +    "device_mode": [
