@@ -1,0 +1,57 @@
+From 75ceefca9e09a293ef0f1f4bab7082c986f9de5a Mon Sep 17 00:00:00 2001
+From: dengbo <dengbo@deepin.org>
+Date: Wed, 20 May 2026 15:40:07 +0800
+Subject: [PATCH] feat: add system config
+
+Add system config to enable device mode.
+---
+ misc/CMakeLists.txt           | 9 +++++++--
+ misc/etc/linglong/config.json | 5 +++++
+ 2 files changed, 12 insertions(+), 2 deletions(-)
+ create mode 100644 misc/etc/linglong/config.json
+
+diff --git a/misc/CMakeLists.txt b/misc/CMakeLists.txt
+index 2a5046ac..da3d0c8c 100644
+--- a/misc/CMakeLists.txt
++++ b/misc/CMakeLists.txt
+@@ -1,4 +1,4 @@
+-# SPDX-FileCopyrightText: 2023 - 2026 UnionTech Software Technology Co., Ltd.
++# SPDX-FileCopyrightText: 2023 - 2026 UnionTech Software Technology Co., Ltd.
+ #
+ # SPDX-License-Identifier: LGPL-3.0-or-later
+ 
+@@ -50,7 +50,8 @@ configure_files(
+   share/mime/packages/vnd.linyaps.uab.xml
+   share/polkit-1/actions/org.deepin.linglong.PackageManager1.policy
+   share/icons/linyaps.svg
+-  share/applications/linyaps.desktop)
++  share/applications/linyaps.desktop
++  etc/linglong/config.json)
+ 
+ # bash-completion
+ set(BASH_COMPLETIONS_DIR ${CMAKE_INSTALL_DATADIR}/bash-completion)
+@@ -178,6 +179,10 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/share/icons/linyaps.svg
+ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/script/linglong.sh
+         DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/profile.d)
+ 
++# install systemd config
++install(FILES ${CMAKE_CURRENT_BINARY_DIR}/etc/linglong/config.json
++        DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/linglong)
++
+ install(
+   FILES ${CMAKE_CURRENT_BINARY_DIR}/script/linglong.sh
+   DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/X11/Xsession.d/
+diff --git a/misc/etc/linglong/config.json b/misc/etc/linglong/config.json
+new file mode 100644
+index 00000000..b85829c5
+--- /dev/null
++++ b/misc/etc/linglong/config.json
+@@ -0,0 +1,5 @@
++{
++    "device_mode": [
++        "passthru"
++    ]
++}
+-- 
+2.51.0
+
