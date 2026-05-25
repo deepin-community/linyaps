@@ -2,7 +2,7 @@ Index: linyaps/libs/linglong/src/linglong/repo/ostree_repo.cpp
 ===================================================================
 --- linyaps.orig/libs/linglong/src/linglong/repo/ostree_repo.cpp
 +++ linyaps/libs/linglong/src/linglong/repo/ostree_repo.cpp
-@@ -1271,6 +1271,21 @@ utils::error::Result<void> OSTreeRepo::p
+@@ -1270,6 +1270,28 @@
      return LINGLONG_OK;
  }
  
@@ -10,27 +10,34 @@ Index: linyaps/libs/linglong/src/linglong/repo/ostree_repo.cpp
 +utils::error::Result<std::string> getAptToken() noexcept
 +{
 +    LINGLONG_TRACE("get apt token");
-+    auto aptToken = utils::command::Cmd("sh").exec({
-+      "-c",
-+      "eval `apt-config shell Token Acquire::SmartMirrors::Token`; echo $Token",
-+    });
++    auto aptToken =
++      linglong::utils::command::Cmd("apt-config").exec({ "shell", "Token", "Acquire::SmartMirrors::Token" });
 +
 +    if (!aptToken) {
 +        return LINGLONG_ERR(aptToken);
 +    }
-+    return aptToken->toStdString();
++    auto token = (*aptToken).toStdString();
++    if (token.empty()) {
++        return LINGLONG_ERR("not found token");
++    }
++    auto start = token.find("'");
++    auto end = token.rfind("'");
++    if (start != std::string::npos && end != std::string::npos && end > start) {
++        return token.substr(start + 1, end - start - 1);
++    }
++    return LINGLONG_ERR("token format error");
 +}
 +
  // 初始化一个GVariantBuilder
  GVariantBuilder OSTreeRepo::initOStreePullOptions(const std::string &ref) noexcept
  {
-@@ -1291,6 +1306,18 @@ GVariantBuilder OSTreeRepo::initOStreePu
+@@ -1290,6 +1312,18 @@
                            "{s@v}",
                            "refs",
                            g_variant_new_variant(g_variant_new_strv(refs.data(), -1)));
 +    auto token = getAptToken();
 +    if (!token) {
-+        qWarning() << "get apt token error: " << token.error().message();
++        LogW("get apt token error: {}", token.error().message());
 +    } else {
 +        GVariantBuilder hdr_builder;
 +        g_variant_builder_init(&hdr_builder, G_VARIANT_TYPE("a(ss)"));
