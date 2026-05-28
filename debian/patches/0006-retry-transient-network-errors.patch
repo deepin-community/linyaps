@@ -1,0 +1,168 @@
+Index: linyaps/libs/linglong/src/linglong/repo/ostree_repo.cpp
+===================================================================
+--- linyaps.orig/libs/linglong/src/linglong/repo/ostree_repo.cpp
++++ linyaps/libs/linglong/src/linglong/repo/ostree_repo.cpp
+@@ -7,6 +7,7 @@
+ #include "ostree_repo.h"
+ 
+ #include "api/ClientAPI.h"
++#include <functional>
+ #include "linglong/api/types/v1/ExportDirs.hpp"
+ #include "linglong/api/types/v1/Generators.hpp"
+ #include "linglong/api/types/v1/PackageInfoV2.hpp"
+@@ -179,9 +180,11 @@
+         LINGLONG_TRACE("update progress status")
+ 
+         if (data->caught_error) {
+-            data->taskContext->reportError(
+-              LINGLONG_ERRV("Caught error during pulling data, waiting for outstanding task"));
+-            return;
++          // Don't report error here; let ostree_repo_pull_with_options() return
++          // and the caller's retry logic handle transient network errors.
++          data->taskContext->updateTask(data->progress, 100,
++                                        "Network error, waiting to retry...");
++          return;
+         }
+ 
+         new_progress = std::max(new_progress, data->progress);
+@@ -1326,6 +1329,58 @@
+     }
+     return builder;
+ }
++// Workaround for libsoup 2.64 connection pool bug: libsoup cannot reliably
++// detect peer-closed connections before reusing them, causing "Connection
++// terminated unexpectedly" (G_IO_ERROR_PARTIAL_INPUT, code 34). Ostree's retry
++// logic only handles G_IO_ERROR_CONNECTION_CLOSED (code 44), not PARTIAL_INPUT,
++// so we retry the entire pull.
++static constexpr int PULL_RETRY_COUNT = 3;
++static constexpr int PULL_RETRY_DELAY_MS = 1000;
++
++static bool isTransientNetworkError(GError *err) {
++  return err != nullptr &&
++             g_error_matches(err, G_IO_ERROR, G_IO_ERROR_CONNECTION_CLOSED) ||
++         g_error_matches(err, G_IO_ERROR, G_IO_ERROR_PARTIAL_INPUT) ||
++         g_error_matches(err, G_IO_ERROR, G_IO_ERROR_TIMED_OUT) ||
++         g_error_matches(err, G_IO_ERROR, G_IO_ERROR_HOST_UNREACHABLE) ||
++         g_error_matches(err, G_IO_ERROR, G_IO_ERROR_NETWORK_UNREACHABLE);
++}
++
++// Retry ostree_repo_pull_with_options on transient network errors.
++// optionsBuilder is called to rebuild GVariant for each retry.
++using PullOptionsBuilder = std::function<GVariant *(void)>;
++
++// Reset caught_error before a new pull so the progress_changed callback
++// can report status normally during the retry/fallback attempt.
++static void resetOstreeUserData(ostreeUserData *data) {
++  data->caught_error = false;
++}
++
++static gboolean ostreeRepoPullWithRetry(OstreeRepo *repo, const char *remote,
++                                        PullOptionsBuilder optionsBuilder,
++                                        OstreeAsyncProgress *progress,
++                                        GCancellable *cancellable,
++                                        GError **error,
++                                        ostreeUserData *userData = nullptr) {
++  g_autoptr(GVariant) pull_options = g_variant_ref_sink(optionsBuilder());
++  for (int i = 0; i <= PULL_RETRY_COUNT; i++) {
++    g_clear_error(error);
++    if (userData) {
++      resetOstreeUserData(userData);
++    }
++    gboolean status = ostree_repo_pull_with_options(
++        repo, remote, pull_options, progress, cancellable, error);
++    if (status || !isTransientNetworkError(*error) || i == PULL_RETRY_COUNT) {
++      return status;
++    }
++    LogW("ostree pull transient network error ({}), retrying {}/{}",
++         (*error)->message, i + 1, PULL_RETRY_COUNT);
++    g_usleep(PULL_RETRY_DELAY_MS * 1000);
++    g_clear_pointer(&pull_options, g_variant_unref);
++    pull_options = g_variant_ref_sink(optionsBuilder());
++  }
++  return FALSE;
++}
+ 
+ // 在pull之前获取commit size，用于计算进度，需要服务器支持ostree.sizes
+ utils::error::Result<std::vector<guint64>>
+@@ -1334,21 +1389,17 @@
+     LINGLONG_TRACE("get commit size " + QString::fromStdString(refString));
+ #if OSTREE_CHECK_VERSION(2020, 1)
+     g_autoptr(GError) gErr = nullptr;
+-    GVariantBuilder builder = this->initOStreePullOptions(refString);
+-    // 设置flags只获取commit的metadata
+-    g_variant_builder_add(
+-      &builder,
+-      "{s@v}",
+-      "flags",
+-      g_variant_new_variant(g_variant_new_int32(OSTREE_REPO_PULL_FLAGS_COMMIT_ONLY)));
+-    g_autoptr(GVariant) pull_options = g_variant_ref_sink(g_variant_builder_end(&builder));
+     // 获取commit的metadata
+-    auto status = ostree_repo_pull_with_options(this->ostreeRepo.get(),
+-                                                remote.c_str(),
+-                                                pull_options,
+-                                                nullptr,
+-                                                nullptr,
+-                                                &gErr);
++    auto status = ostreeRepoPullWithRetry(
++      this->ostreeRepo.get(), remote.c_str(),
++      [&]() {
++        GVariantBuilder retryBuilder = this->initOStreePullOptions(refString);
++        g_variant_builder_add(
++          &retryBuilder, "{s@v}", "flags",
++          g_variant_new_variant(g_variant_new_int32(OSTREE_REPO_PULL_FLAGS_COMMIT_ONLY)));
++        return g_variant_builder_end(&retryBuilder);
++      },
++      nullptr, nullptr, &gErr);
+     if (status == FALSE) {
+         return LINGLONG_ERR("ostree_repo_pull", gErr);
+     }
+@@ -1447,16 +1498,16 @@
+ 
+     g_autoptr(GError) gErr = nullptr;
+ 
+-    auto builder = this->initOStreePullOptions(refString);
+-    g_autoptr(GVariant) pull_options = g_variant_ref_sink(g_variant_builder_end(&builder));
+     // 这里不能使用g_main_context_push_thread_default，因为会阻塞Qt的事件循环
+ 
+-    auto status = ostree_repo_pull_with_options(this->ostreeRepo.get(),
+-                                                pullRepo.alias.value_or(pullRepo.name).c_str(),
+-                                                pull_options,
+-                                                progress,
+-                                                cancellable,
+-                                                &gErr);
++    auto status = ostreeRepoPullWithRetry(
++      this->ostreeRepo.get(),
++      pullRepo.alias.value_or(pullRepo.name).c_str(),
++      [&]() {
++        auto builder = this->initOStreePullOptions(refString);
++        return g_variant_builder_end(&builder);
++      },
++      progress, cancellable, &gErr, &data);
+     ostree_async_progress_finish(progress);
+     auto shouldFallback = false;
+     if (status == FALSE) {
+@@ -1479,16 +1530,14 @@
+ 
+         g_clear_error(&gErr);
+ 
+-        GVariantBuilder builder = this->initOStreePullOptions(refString);
+-
+-        g_autoptr(GVariant) pull_options = g_variant_ref_sink(g_variant_builder_end(&builder));
+-
+-        status = ostree_repo_pull_with_options(this->ostreeRepo.get(),
+-                                               pullRepo.alias.value_or(pullRepo.name).c_str(),
+-                                               pull_options,
+-                                               progress,
+-                                               cancellable,
+-                                               &gErr);
++        status = ostreeRepoPullWithRetry(
++          this->ostreeRepo.get(),
++          pullRepo.alias.value_or(pullRepo.name).c_str(),
++          [&]() {
++            auto builder = this->initOStreePullOptions(refString);
++            return g_variant_builder_end(&builder);
++          },
++          progress, cancellable, &gErr, &data);
+         ostree_async_progress_finish(progress);
+         if (status == FALSE) {
+             taskContext.reportError(LINGLONG_ERRV("ostree_repo_pull", gErr));
