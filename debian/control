@@ -36,6 +36,7 @@ Homepage: http://www.deepin.org
 Package: linglong-bin
 Architecture: any
 Depends: desktop-file-utils,
+         erofsfuse,
          libglib2.0-bin,
          linglong-box | crun,
          shared-mime-info,
@@ -43,22 +44,19 @@ Depends: desktop-file-utils,
          erofs-utils,
          ${misc:Depends},
          ${shlibs:Depends}
-Replaces: linglong-dbus-proxy
-Conflicts: linglong-dbus-proxy
-Recommends: erofsfuse
 Description: Linglong package manager.
  Linglong package management command line tool.
 
 Package: linglong-builder
 Architecture: any
 Depends: erofs-utils,
+         erofsfuse,
          fuse-overlayfs,
          git,
          linglong-bin,
          linglong-box | crun,
          ${misc:Depends},
          ${shlibs:Depends}
-Recommends: linglong-loader
 Suggests: devscripts
 Description: Linglong application building tools.
  ll-builder is a tool that makes it easy to build applications and dependencies.
