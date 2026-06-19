@@ -9,6 +9,7 @@
 #include "configure.h"
 #include "linglong/api/types/helper.h"
 #include "linglong/api/types/v1/Generators.hpp" // IWYU pragma: keep
+#include "linglong/api/types/v1/InteractionReply.hpp"
 #include "linglong/api/types/v1/PackageInfoV2.hpp"
 #include "linglong/api/types/v1/PackageManager1JobInfo.hpp"
 #include "linglong/api/types/v1/PackageManager1PruneResult.hpp"
@@ -25,6 +26,7 @@
 #include "linglong/package/reference.h"
 #include "linglong/package_manager/package_task.h"
 #include "linglong/package_manager/package_update.h"
+#include "linglong/package_manager/polkit_authority.h"
 #include "linglong/package_manager/ref_installation.h"
 #include "linglong/package_manager/uab_installation.h"
 #include "linglong/repo/ostree_repo.h"
@@ -44,13 +46,16 @@
 
 #include <QDBusInterface>
 #include <QDBusReply>
+#include <QDBusServiceWatcher>
 #include <QDBusUnixFileDescriptor>
 #include <QEventLoop>
 #include <QMetaObject>
 #include <QTimer>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <functional>
 #include <unordered_map>
 #include <utility>
 
@@ -83,6 +88,29 @@ QVariantMap toDBusReply(utils::error::ErrorCode code,
                                     .type = type });
 }
 
+void checkPolkitAuthorizationAsync(const std::string &actionId,
+                                   const std::string &systemBusName,
+                                   std::function<void(utils::error::Result<void>)> callback)
+{
+    PolkitAuthority::checkAuthorizationAsync(
+      actionId,
+      systemBusName,
+      [callback = std::move(callback)](utils::error::Result<bool> authResult) {
+          LINGLONG_TRACE("check polkit authorization");
+          if (!authResult) {
+              callback(LINGLONG_ERR(authResult));
+              return;
+          }
+
+          if (!(*authResult)) {
+              callback(LINGLONG_ERR("not authorized", utils::error::ErrorCode::PermissionDenied));
+              return;
+          }
+
+          callback(LINGLONG_OK);
+      });
+}
+
 } // namespace
 
 PackageManager::PackageManager(
@@ -98,12 +126,13 @@ PackageManager::PackageManager(
 {
 }
 
-void PackageManager::initDaemonMode() noexcept
+void PackageManager::initDaemonMode(bool peerMode) noexcept
 {
     if (daemonModeInitialized) {
         return;
     }
     daemonModeInitialized = true;
+    m_peerMode = peerMode;
 
     // tasks and PackageManager are on the same thread, it's safe to getTask in slot
     QObject::connect(&tasks, &PackageTaskQueue::taskDone, this, [this](const QString &taskID) {
@@ -439,16 +468,62 @@ void PackageManager::deferredUninstall() noexcept
 
 auto PackageManager::getConfiguration() const noexcept -> QVariantMap
 {
+    if (!daemonModeInitialized) {
+        return toDBusReply(utils::error::ErrorCode::Failed, "daemon mode not initialized");
+    }
     return common::serialize::toQVariantMap(this->repo->getConfig());
 }
 
-void PackageManager::setConfiguration(const QVariantMap &parameters) noexcept
+void PackageManager::SetConfiguration(const QVariantMap &parameters) noexcept
 {
     LogI("set configuration for package manager");
+
+    if (!daemonModeInitialized) {
+        sendErrorReply(QDBusError::Failed, "daemon mode not initialized");
+        return;
+    }
+
+    if (!m_peerMode) {
+        auto msg = message();
+        auto conn = connection();
+        setDelayedReply(true);
+
+        checkPolkitAuthorizationAsync(
+          "org.deepin.linglong.PackageManager1.set-configuration",
+          msg.service().toStdString(),
+          [this, parameters, msg, conn](utils::error::Result<void> authResult) {
+              if (!authResult) {
+                  conn.send(
+                    msg.createErrorReply(QDBusError::AccessDenied,
+                                         QString::fromStdString(authResult.error().message())));
+                  return;
+              }
+
+              auto result = setConfigurationImpl(parameters);
+              if (!result) {
+                  conn.send(msg.createErrorReply(QDBusError::Failed,
+                                                 QString::fromStdString(result.error().message())));
+                  return;
+              }
+
+              conn.send(msg.createReply());
+          });
+        return;
+    }
+
+    auto result = setConfigurationImpl(parameters);
+    if (!result) {
+        sendErrorReply(QDBusError::Failed, QString::fromStdString(result.error().message()));
+    }
+}
+
+utils::error::Result<void>
+PackageManager::setConfigurationImpl(const QVariantMap &parameters) noexcept
+{
+    LINGLONG_TRACE("set configuration");
     auto cfg = common::serialize::fromQVariantMap<api::types::v1::RepoConfigV2>(parameters);
     if (!cfg) {
-        sendErrorReply(QDBusError::InvalidArgs, QString::fromStdString(cfg.error().message()));
-        return;
+        return LINGLONG_ERR(cfg);
     }
 
     const auto &cfgRef = *cfg;
@@ -458,7 +533,7 @@ void PackageManager::setConfiguration(const QVariantMap &parameters) noexcept
     LogD("cur config: {}", nlohmann::json(curCfg).dump());
     if (cfgRef == curCfg) {
         LogI("configuration not changed, ignore setting.");
-        return;
+        return LINGLONG_OK;
     }
     if (const auto &defaultRepo = cfg->defaultRepo;
         std::find_if(cfg->repos.begin(),
@@ -467,19 +542,20 @@ void PackageManager::setConfiguration(const QVariantMap &parameters) noexcept
                          return repo.alias.value_or(repo.name) == defaultRepo;
                      })
         == cfg->repos.end()) {
-        sendErrorReply(QDBusError::Failed,
-                       "default repository is missing after updating configuration.");
-        return;
+        return LINGLONG_ERR("default repository is missing after updating configuration.");
     }
 
     auto result = this->repo->setConfig(*cfg);
     if (!result) {
-        sendErrorReply(QDBusError::Failed, result.error().message().c_str());
+        return LINGLONG_ERR(result);
     }
+
+    return LINGLONG_OK;
 }
 
 QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd,
-                                             const api::types::v1::CommonOptions &options) noexcept
+                                             const api::types::v1::CommonOptions &options,
+                                             const CallerContext &ctx) noexcept
 {
     auto layerFileRet = package::LayerFile::New(fd.fileDescriptor());
     if (!layerFileRet) {
@@ -537,10 +613,7 @@ QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd,
         return toDBusReply(fuzzyRef);
     }
 
-    auto localRef = this->repo->clearReference(*fuzzyRef,
-                                               {
-                                                 .fallbackToRemote = false // NOLINT
-                                               });
+    auto localRef = this->repo->clearReferenceLocal(*fuzzyRef);
     if (localRef) {
         auto layerDir = this->repo->getLayerDir(*localRef, packageInfo.packageInfoV2Module);
         if (layerDir && layerDir->valid()) {
@@ -582,26 +655,9 @@ QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd,
           PackageTask &taskRef = dynamic_cast<PackageTask &>(task);
           if (msgType == api::types::v1::InteractionMessageType::Upgrade
               && !options.skipInteraction) {
-              Q_EMIT RequestInteraction(QDBusObjectPath(taskRef.taskObjectPath().c_str()),
-                                        static_cast<int>(msgType),
-                                        common::serialize::toQVariantMap(additionalMessage));
-              QEventLoop loop;
-              auto conn = connect(
-                this,
-                &PackageManager::ReplyReceived,
-                [&taskRef, &loop](const QVariantMap &reply) {
-                    // handle reply
-                    auto interactionReply =
-                      common::serialize::fromQVariantMap<api::types::v1::InteractionReply>(reply);
-                    if (interactionReply->action != "yes") {
-                        taskRef.updateState(linglong::api::types::v1::State::Canceled, "canceled");
-                    }
-
-                    loop.exit(0);
-                });
-              loop.exec();
-
-              disconnect(conn);
+              if (!this->waitConfirm(taskRef, msgType, additionalMessage)) {
+                  return;
+              }
           }
           if (taskRef.isTaskDone()) {
               return;
@@ -687,7 +743,7 @@ QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd,
           }
       };
 
-    auto taskRet = tasks.addPackageTask(std::move(installer), connection());
+    auto taskRet = tasks.addPackageTask(std::move(installer), ctx);
     if (!taskRet) {
         return toDBusReply(taskRet);
     }
@@ -703,7 +759,8 @@ QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd,
 }
 
 QVariantMap PackageManager::installFromUAB(const QDBusUnixFileDescriptor &fd,
-                                           const api::types::v1::CommonOptions &options) noexcept
+                                           const api::types::v1::CommonOptions &options,
+                                           const CallerContext &ctx) noexcept
 {
     std::unique_ptr<utils::InstallHookManager> installHookManager =
       std::make_unique<utils::InstallHookManager>();
@@ -725,12 +782,48 @@ QVariantMap PackageManager::installFromUAB(const QDBusUnixFileDescriptor &fd,
                            "failed to create uab installation action");
     }
 
-    return runActionOnTaskQueue(action);
+    return runActionOnTaskQueue(action, ctx);
 }
 
 auto PackageManager::InstallFromFile(const QDBusUnixFileDescriptor &fd,
                                      const QString &fileType,
                                      const QVariantMap &options) noexcept -> QVariantMap
+{
+    if (!daemonModeInitialized) {
+        return toDBusReply(utils::error::ErrorCode::Failed, "daemon mode not initialized");
+    }
+
+    if (!m_peerMode) {
+        auto msg = message();
+        auto conn = connection();
+        setDelayedReply(true);
+
+        CallerContext ctx{ conn, msg };
+
+        checkPolkitAuthorizationAsync(
+          "org.deepin.linglong.PackageManager1.install-from-file",
+          msg.service().toStdString(),
+          [this, fdDup = fd, fileType, options, ctx](utils::error::Result<void> authResult) {
+              if (!authResult) {
+                  ctx.connection.send(ctx.message.createErrorReply(
+                    QDBusError::AccessDenied,
+                    QString::fromStdString(authResult.error().message())));
+                  return;
+              }
+
+              auto result = installFromFileImpl(fdDup, fileType, options, ctx);
+              ctx.connection.send(ctx.message.createReply(result));
+          });
+        return {};
+    }
+
+    return installFromFileImpl(fd, fileType, options, CallerContext{ connection(), message() });
+}
+
+QVariantMap PackageManager::installFromFileImpl(const QDBusUnixFileDescriptor &fd,
+                                                const QString &fileType,
+                                                const QVariantMap &options,
+                                                const CallerContext &ctx) noexcept
 {
     if (!fd.isValid()) {
         return toDBusReply(utils::error::ErrorCode::Failed, "invalid file descriptor");
@@ -741,22 +834,53 @@ auto PackageManager::InstallFromFile(const QDBusUnixFileDescriptor &fd,
         return toDBusReply(opts);
     }
 
-    const static QHash<QString,
-                       QVariantMap (PackageManager::*)(
-                         const QDBusUnixFileDescriptor &,
-                         const api::types::v1::CommonOptions &) noexcept>
-      installers = { { "layer", &PackageManager::installFromLayer },
-                     { "uab", &PackageManager::installFromUAB } };
-
-    if (!installers.contains(fileType)) {
-        auto msg = fmt::format("{} is unsupported fileType", fileType.toStdString());
-        return toDBusReply(utils::error::ErrorCode::AppInstallUnsupportedFileFormat, msg);
+    if (fileType == "layer") {
+        return installFromLayer(fd, *opts, ctx);
     }
 
-    return std::invoke(installers[fileType], this, fd, *opts);
+    if (fileType == "uab") {
+        return installFromUAB(fd, *opts, ctx);
+    }
+
+    auto msg = fmt::format("{} is unsupported fileType", fileType.toStdString());
+    return toDBusReply(utils::error::ErrorCode::AppInstallUnsupportedFileFormat, msg);
 }
 
 auto PackageManager::Install(const QVariantMap &parameters) noexcept -> QVariantMap
+{
+    if (!daemonModeInitialized) {
+        return toDBusReply(utils::error::ErrorCode::Failed, "daemon mode not initialized");
+    }
+
+    if (!m_peerMode) {
+        auto msg = message();
+        auto conn = connection();
+        setDelayedReply(true);
+
+        CallerContext ctx{ conn, msg };
+
+        checkPolkitAuthorizationAsync(
+          "org.deepin.linglong.PackageManager1.install",
+          msg.service().toStdString(),
+          [this, parameters, ctx](utils::error::Result<void> authResult) {
+              if (!authResult) {
+                  ctx.connection.send(ctx.message.createErrorReply(
+                    QDBusError::AccessDenied,
+                    QString::fromStdString(authResult.error().message())));
+                  return;
+              }
+
+              auto result = installImpl(parameters, ctx);
+              ctx.connection.send(ctx.message.createReply(result));
+          });
+        return {};
+    }
+
+    return installImpl(parameters, CallerContext{ connection(), message() });
+}
+
+QVariantMap PackageManager::installImpl(const QVariantMap &parameters,
+                                        const CallerContext &ctx) noexcept
 {
     auto paras =
       common::serialize::fromQVariantMap<api::types::v1::PackageManager1InstallParameters>(
@@ -799,10 +923,44 @@ auto PackageManager::Install(const QVariantMap &parameters) noexcept -> QVariant
         return toDBusReply(utils::error::ErrorCode::AppInstallFailed, "");
     }
 
-    return runActionOnTaskQueue(action);
+    return runActionOnTaskQueue(action, ctx);
 }
 
 auto PackageManager::Uninstall(const QVariantMap &parameters) noexcept -> QVariantMap
+{
+    if (!daemonModeInitialized) {
+        return toDBusReply(utils::error::ErrorCode::Failed, "daemon mode not initialized");
+    }
+
+    if (!m_peerMode) {
+        auto msg = message();
+        auto conn = connection();
+        setDelayedReply(true);
+
+        CallerContext ctx{ conn, msg };
+
+        checkPolkitAuthorizationAsync(
+          "org.deepin.linglong.PackageManager1.uninstall",
+          msg.service().toStdString(),
+          [this, parameters, ctx](utils::error::Result<void> authResult) {
+              if (!authResult) {
+                  ctx.connection.send(ctx.message.createErrorReply(
+                    QDBusError::AccessDenied,
+                    QString::fromStdString(authResult.error().message())));
+                  return;
+              }
+
+              auto result = uninstallImpl(parameters, ctx);
+              ctx.connection.send(ctx.message.createReply(result));
+          });
+        return {};
+    }
+
+    return uninstallImpl(parameters, CallerContext{ connection(), message() });
+}
+
+QVariantMap PackageManager::uninstallImpl(const QVariantMap &parameters,
+                                          const CallerContext &ctx) noexcept
 {
     auto paras =
       common::serialize::fromQVariantMap<api::types::v1::PackageManager1UninstallParameters>(
@@ -898,7 +1056,7 @@ auto PackageManager::Uninstall(const QVariantMap &parameters) noexcept -> QVaria
               taskRef.reportError(std::move(res.error()));
           }
       },
-      connection());
+      ctx);
     if (!taskRet) {
         return toDBusReply(taskRet);
     }
@@ -964,6 +1122,40 @@ utils::error::Result<void> PackageManager::Uninstall(PackageTask &taskContext,
 
 auto PackageManager::Update(const QVariantMap &parameters) noexcept -> QVariantMap
 {
+    if (!daemonModeInitialized) {
+        return toDBusReply(utils::error::ErrorCode::Failed, "daemon mode not initialized");
+    }
+
+    if (!m_peerMode) {
+        auto msg = message();
+        auto conn = connection();
+        setDelayedReply(true);
+
+        CallerContext ctx{ conn, msg };
+
+        checkPolkitAuthorizationAsync(
+          "org.deepin.linglong.PackageManager1.update",
+          msg.service().toStdString(),
+          [this, parameters, ctx](utils::error::Result<void> authResult) {
+              if (!authResult) {
+                  ctx.connection.send(ctx.message.createErrorReply(
+                    QDBusError::AccessDenied,
+                    QString::fromStdString(authResult.error().message())));
+                  return;
+              }
+
+              auto result = updateImpl(parameters, ctx);
+              ctx.connection.send(ctx.message.createReply(result));
+          });
+        return {};
+    }
+
+    return updateImpl(parameters, CallerContext{ connection(), message() });
+}
+
+QVariantMap PackageManager::updateImpl(const QVariantMap &parameters,
+                                       const CallerContext &ctx) noexcept
+{
     auto paras =
       common::serialize::fromQVariantMap<api::types::v1::PackageManager1UpdateParameters>(
         parameters);
@@ -978,7 +1170,7 @@ auto PackageManager::Update(const QVariantMap &parameters) noexcept -> QVariantM
                            "failed to create update action");
     }
 
-    return runActionOnTaskQueue(action);
+    return runActionOnTaskQueue(action, ctx);
 }
 
 utils::error::Result<void> PackageManager::installRefModule(Task &task,
@@ -1139,6 +1331,10 @@ utils::error::Result<void> PackageManager::uninstallRefModule(const package::Ref
 
 auto PackageManager::Search(const QVariantMap &parameters) noexcept -> QVariantMap
 {
+    if (!daemonModeInitialized) {
+        return toDBusReply(utils::error::ErrorCode::Failed, "daemon mode not initialized");
+    }
+
     auto paras =
       common::serialize::fromQVariantMap<api::types::v1::PackageManager1SearchParameters>(
         parameters);
@@ -1232,12 +1428,7 @@ PackageManager::needToInstall(const std::string &refStr, std::optional<std::stri
         fuzzyRef->channel = *channel;
     }
 
-    auto local = this->repo->clearReference(*fuzzyRef,
-                                            {
-                                              .forceRemote = false,
-                                              .fallbackToRemote = false,
-                                              .semanticMatching = true,
-                                            });
+    auto local = this->repo->clearReferenceLocal(*fuzzyRef, true);
     // if the ref is already installed, do nothing
     if (local) {
         return std::nullopt;
@@ -1259,12 +1450,7 @@ PackageManager::needToUpgrade(const package::FuzzyReference &fuzzyRef,
     LINGLONG_TRACE(fmt::format("need to upgrade ref {}", fuzzyRef.toString()));
 
     if (!local) {
-        auto res = this->repo->clearReference(fuzzyRef,
-                                              {
-                                                .forceRemote = false,
-                                                .fallbackToRemote = false,
-                                                .semanticMatching = true,
-                                              });
+        auto res = this->repo->clearReferenceLocal(fuzzyRef, true);
         if (res) {
             local = std::move(res).value();
         }
@@ -1353,12 +1539,7 @@ utils::error::Result<void> PackageManager::installDependsRef(Task &task,
         fuzzyRef->version = version;
     }
 
-    auto local = this->repo->clearReference(*fuzzyRef,
-                                            {
-                                              .forceRemote = false,
-                                              .fallbackToRemote = false,
-                                              .semanticMatching = true,
-                                            });
+    auto local = this->repo->clearReferenceLocal(*fuzzyRef, true);
     // if the ref is already installed, do nothing
     if (local) {
         return LINGLONG_OK;
@@ -1378,6 +1559,37 @@ utils::error::Result<void> PackageManager::installDependsRef(Task &task,
 }
 
 auto PackageManager::Prune() noexcept -> QVariantMap
+{
+    if (!daemonModeInitialized) {
+        return toDBusReply(utils::error::ErrorCode::Failed, "daemon mode not initialized");
+    }
+
+    if (!m_peerMode) {
+        auto msg = message();
+        auto conn = connection();
+        setDelayedReply(true);
+
+        checkPolkitAuthorizationAsync(
+          "org.deepin.linglong.PackageManager1.prune",
+          msg.service().toStdString(),
+          [this, msg, conn](utils::error::Result<void> authResult) {
+              if (!authResult) {
+                  conn.send(
+                    msg.createErrorReply(QDBusError::AccessDenied,
+                                         QString::fromStdString(authResult.error().message())));
+                  return;
+              }
+
+              auto result = pruneImpl();
+              conn.send(msg.createReply(result));
+          });
+        return {};
+    }
+
+    return pruneImpl();
+}
+
+QVariantMap PackageManager::pruneImpl() noexcept
 {
     auto task = tasks.addTask([this](Task &task) {
         std::vector<api::types::v1::PackageInfoV2> pkgs;
@@ -1456,9 +1668,7 @@ PackageManager::Prune(std::vector<api::types::v1::PackageInfoV2> &removed) noexc
                                                                 name,
                                                                 extension.version,
                                                                 std::nullopt);
-                auto ref = repo->clearReference(
-                  *fuzzyRef,
-                  { .forceRemote = false, .fallbackToRemote = false, .semanticMatching = true });
+                auto ref = repo->clearReferenceLocal(*fuzzyRef, true);
                 if (ref) {
                     touchTarget(*ref, true);
                 }
@@ -1501,12 +1711,7 @@ PackageManager::Prune(std::vector<api::types::v1::PackageInfoV2> &removed) noexc
                 continue;
             }
 
-            auto runtimeRef = this->repo->clearReference(*runtimeFuzzyRef,
-                                                         {
-                                                           .forceRemote = false,
-                                                           .fallbackToRemote = false,
-                                                           .semanticMatching = true,
-                                                         });
+            auto runtimeRef = this->repo->clearReferenceLocal(*runtimeFuzzyRef, true);
             if (!runtimeRef) {
                 LogW("{}", runtimeRef.error());
                 continue;
@@ -1521,12 +1726,7 @@ PackageManager::Prune(std::vector<api::types::v1::PackageInfoV2> &removed) noexc
             continue;
         }
 
-        auto baseRef = this->repo->clearReference(*baseFuzzyRef,
-                                                  {
-                                                    .forceRemote = false,
-                                                    .fallbackToRemote = false,
-                                                    .semanticMatching = true,
-                                                  });
+        auto baseRef = this->repo->clearReferenceLocal(*baseFuzzyRef, true);
         if (!baseRef) {
             LogW("{}", baseRef.error());
             continue;
@@ -1587,6 +1787,10 @@ PackageManager::Prune(std::vector<api::types::v1::PackageInfoV2> &removed) noexc
 auto PackageManager::InitRunContext(const QString &runContextCfg,
                                     const QString &containerID) noexcept -> QVariantMap
 {
+    if (!daemonModeInitialized) {
+        return toDBusReply(utils::error::ErrorCode::Failed, "daemon mode not initialized");
+    }
+
     auto task = m_init_run_context_queue.addPackageTask(
       [this, runContextCfg = runContextCfg.toStdString(), containerID = containerID.toStdString()](
         Task &task) {
@@ -1656,10 +1860,115 @@ auto PackageManager::InitRunContext(const QString &runContextCfg,
     });
 }
 
-void PackageManager::ReplyInteraction([[maybe_unused]] QDBusObjectPath object_path,
-                                      const QVariantMap &replies)
+void PackageManager::ReplyInteraction(QDBusObjectPath object_path, const QVariantMap &replies)
 {
-    Q_EMIT this->ReplyReceived(replies);
+    Q_EMIT this->ReplyReceived(object_path, replies);
+}
+
+void PackageManager::onPeerDisconnected() noexcept
+{
+    LogW("peer caller disconnected");
+    Q_EMIT CallerDisconnected();
+}
+
+bool PackageManager::waitConfirm(
+  PackageTask &taskRef,
+  api::types::v1::InteractionMessageType msgType,
+  const api::types::v1::PackageManager1RequestInteractionAdditionalMessage
+    &additionalMessage) noexcept
+{
+    auto objectPath = QDBusObjectPath(taskRef.taskObjectPath().c_str());
+    QEventLoop loop;
+    QTimer timeoutTimer;
+    timeoutTimer.setSingleShot(true);
+
+    auto callerContext = taskRef.callerContext();
+    std::unique_ptr<QDBusServiceWatcher> watcher;
+
+    QMetaObject::Connection callerDisconnectedConn;
+
+    if (callerContext.isPeerMode()) {
+        callerDisconnectedConn =
+          connect(this, &PackageManager::CallerDisconnected, &loop, [&taskRef, &loop]() {
+              taskRef.updateState(linglong::api::types::v1::State::Canceled, "caller disconnected");
+              loop.exit(1);
+          });
+
+        auto connected = callerContext.connection.connect("",
+                                                          "/org/freedesktop/DBus/Local",
+                                                          "org.freedesktop.DBus.Local",
+                                                          "Disconnected",
+                                                          this,
+                                                          SLOT(onPeerDisconnected()));
+        if (!connected) {
+            LogW("failed to connect to Disconnected signal for peer mode");
+        }
+    } else {
+        auto callerName = callerContext.callerBusName();
+        if (!callerName.isEmpty()) {
+            watcher =
+              std::make_unique<QDBusServiceWatcher>(callerName,
+                                                    callerContext.connection,
+                                                    QDBusServiceWatcher::WatchForUnregistration);
+            connect(watcher.get(),
+                    &QDBusServiceWatcher::serviceUnregistered,
+                    &loop,
+                    [&taskRef, &loop, callerName]() {
+                        LogW("caller {} disconnected", callerName.toStdString());
+                        taskRef.updateState(linglong::api::types::v1::State::Canceled,
+                                            "caller disconnected");
+                        loop.exit(1);
+                    });
+        }
+    }
+
+    auto replyConn =
+      connect(this,
+              &PackageManager::ReplyReceived,
+              &loop,
+              [&taskRef, &loop, objectPath](const QDBusObjectPath &replyObjectPath,
+                                            const QVariantMap &reply) {
+                  if (replyObjectPath.path() != objectPath.path()) {
+                      return;
+                  }
+
+                  auto interactionReply =
+                    common::serialize::fromQVariantMap<api::types::v1::InteractionReply>(reply);
+                  if (!interactionReply || interactionReply->action != "yes") {
+                      taskRef.updateState(linglong::api::types::v1::State::Canceled, "canceled");
+                  }
+                  loop.exit(0);
+              });
+
+    auto timeoutConn = connect(&timeoutTimer, &QTimer::timeout, &loop, [&taskRef, &loop]() {
+        auto msg = fmt::format("task {} confirm timeout", taskRef.taskID());
+        LogW(msg);
+        taskRef.updateState(linglong::api::types::v1::State::Canceled, msg);
+        loop.exit(1);
+    });
+
+    Q_EMIT RequestInteraction(objectPath,
+                              static_cast<int>(msgType),
+                              common::serialize::toQVariantMap(additionalMessage));
+
+    timeoutTimer.start(std::chrono::milliseconds{ 180000 });
+    loop.exec();
+    timeoutTimer.stop();
+
+    disconnect(replyConn);
+    disconnect(timeoutConn);
+    disconnect(callerDisconnectedConn);
+
+    if (callerContext.isPeerMode()) {
+        callerContext.connection.disconnect("",
+                                            "/org/freedesktop/DBus/Local",
+                                            "org.freedesktop.DBus.Local",
+                                            "Disconnected",
+                                            this,
+                                            SLOT(onPeerDisconnected()));
+    }
+
+    return !taskRef.isTaskDone();
 }
 
 // no-op for now
@@ -1712,12 +2021,12 @@ utils::error::Result<void> PackageManager::initRunContext(const std::string &run
         return LINGLONG_ERR("container id mismatch");
     }
 
-    auto appLayerItem = ctx.getCachedAppItem();
-    if (!appLayerItem) {
-        return LINGLONG_ERR("failed to get cached app item");
+    auto targetItem = ctx.getCachedTargetItem();
+    if (!targetItem) {
+        return LINGLONG_ERR("failed to get cached target item", targetItem);
     }
 
-    auto appCache = common::dir::getContainerCacheDir(appLayerItem->commit, containerID);
+    auto appCache = common::dir::getContainerCacheDir(targetItem->commit, containerID);
     auto runContextConfigFile = appCache / ".config";
     std::error_code ec;
     if (std::filesystem::exists(runContextConfigFile, ec)) {
@@ -1796,35 +2105,10 @@ PackageManager::executePostUninstallHooks(const package::Reference &ref) noexcep
     return LINGLONG_OK;
 }
 
-bool PackageManager::waitConfirm(
-  PackageTask &taskRef,
-  api::types::v1::InteractionMessageType msgType,
-  const api::types::v1::PackageManager1RequestInteractionAdditionalMessage
-    &additionalMessage) noexcept
+QVariantMap PackageManager::runActionOnTaskQueue(std::shared_ptr<Action> action,
+                                                 const CallerContext &ctx)
 {
-    Q_EMIT RequestInteraction(QDBusObjectPath(taskRef.taskObjectPath().c_str()),
-                              static_cast<int>(msgType),
-                              common::serialize::toQVariantMap(additionalMessage));
-    QEventLoop loop;
-    auto conn =
-      connect(this, &PackageManager::ReplyReceived, [&taskRef, &loop](const QVariantMap &reply) {
-          auto interactionReply =
-            common::serialize::fromQVariantMap<api::types::v1::InteractionReply>(reply);
-          if (interactionReply->action != "yes") {
-              taskRef.updateState(linglong::api::types::v1::State::Canceled, "canceled");
-          }
-          loop.exit(0);
-      });
-    loop.exec();
-
-    disconnect(conn);
-
-    return !taskRef.isTaskDone();
-}
-
-QVariantMap PackageManager::runActionOnTaskQueue(std::shared_ptr<Action> action)
-{
-    // prepare is run within the DBus calling context.
+    // prepare is run within the DBus calling context or the async polkit callback context.
     // doAction is run within the PM's packages task queue context.
     // state consistency cannot be assumed between prepare and doAction.
     // For now, DBus calling context runs on the application's main event loop,
@@ -1844,7 +2128,7 @@ QVariantMap PackageManager::runActionOnTaskQueue(std::shared_ptr<Action> action)
               LogI("action {} succeed: {}", action->getTaskName(), task.Task::message());
           }
       },
-      connection());
+      ctx);
     if (!taskRet) {
         return toDBusReply(taskRet);
     }

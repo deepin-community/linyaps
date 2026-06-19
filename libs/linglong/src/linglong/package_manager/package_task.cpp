@@ -85,7 +85,12 @@ void PackageTask::Cancel() noexcept
     g_cancellable_cancel(m_cancelFlag);
 }
 
-utils::error::Result<void> PackageTask::exposeOnDBus(const QDBusConnection &connection) noexcept
+void PackageTask::setCallerContext(const CallerContext &ctx)
+{
+    m_callerContext = ctx;
+}
+
+utils::error::Result<void> PackageTask::exposeOnDBus() noexcept
 {
     LINGLONG_TRACE(fmt::format("expose task {} on dbus", taskID()));
 
@@ -99,14 +104,17 @@ utils::error::Result<void> PackageTask::exposeOnDBus(const QDBusConnection &conn
     if (interfaceIndex == -1) {
         return LINGLONG_ERR("internal adaptor error");
     }
-    auto ret = common::dbus::registerDBusObject(connection, taskObjectPath().c_str(), this);
+    auto ret =
+      common::dbus::registerDBusObject(m_callerContext.connection, taskObjectPath().c_str(), this);
     if (!ret) {
         return LINGLONG_ERR(ret);
     }
 
     const auto *interface = mo->classInfo(interfaceIndex).value();
-    m_forwarder =
-      new common::dbus::PropertiesForwarder(connection, taskObjectPath().c_str(), interface, this);
+    m_forwarder = new common::dbus::PropertiesForwarder(m_callerContext.connection,
+                                                        taskObjectPath().c_str(),
+                                                        interface,
+                                                        this);
 
     QObject::connect(this, &PackageTask::changePropertiesDone, m_forwarder, [this]() {
         auto ret = m_forwarder->forward();

@@ -15,8 +15,10 @@
 #include "linglong/utils/overlayfs.h"
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace linglong::builder {
@@ -59,7 +61,20 @@ void mergeOutput(const std::vector<std::filesystem::path> &src,
                  const std::filesystem::path &dest,
                  const std::vector<std::string> &targets,
                  const std::vector<std::string> &excludes);
-}
+utils::error::Result<void> pullResolvedRef(const package::ReferenceWithRepo &refRepo,
+                                           repo::OSTreeRepo &repo,
+                                           const std::string &module) noexcept;
+using DependencyReference =
+  std::pair<std::optional<package::ReferenceWithRepo>, std::optional<package::Reference>>;
+utils::error::Result<DependencyReference>
+clearDependency(const std::string &fuzzyRefStr,
+                repo::OSTreeRepo &repo,
+                bool useRemote,
+                std::optional<std::string> module = std::nullopt) noexcept;
+utils::error::Result<package::Reference> pullDependency(const std::string &fuzzyRefStr,
+                                                        repo::OSTreeRepo &repo,
+                                                        const std::string &module) noexcept;
+} // namespace detail
 
 class Builder
 {
@@ -131,9 +146,6 @@ private:
     void fixLocaltimeInOverlay(std::unique_ptr<utils::OverlayFS> &base);
     utils::error::Result<package::Reference>
     ensureUtils(const std::string &id, const package::Architecture &arch) noexcept;
-    utils::error::Result<package::Reference> clearDependency(const std::string &ref,
-                                                             bool forceRemote,
-                                                             bool fallbackToRemote) noexcept;
     auto generateEntryScript() noexcept -> utils::error::Result<void>;
     auto generateBuildDependsScript() noexcept -> utils::error::Result<bool>;
     auto generateDependsScript() noexcept -> utils::error::Result<bool>;

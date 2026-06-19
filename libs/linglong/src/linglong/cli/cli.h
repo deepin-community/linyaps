@@ -12,6 +12,7 @@
 #include "linglong/api/types/v1/PackageInfoDisplay.hpp"
 #include "linglong/cli/interactive_notifier.h"
 #include "linglong/cli/printer.h"
+#include "linglong/common/cli/repo.h"
 #include "linglong/common/serialize/json.h"
 #include "linglong/repo/ostree_repo.h"
 #include "linglong/runtime/container_builder.h"
@@ -62,6 +63,7 @@ struct RunOptions
     std::vector<std::string> cdiSpecDir = { "/etc/cdi", "/var/run/cdi" };
     std::vector<std::string> cdiDevices;
     std::vector<api::types::v1::DeviceOption> deviceOptions;
+    std::optional<std::string> instance;
 };
 
 struct EnterOptions
@@ -125,14 +127,6 @@ struct ContentOptions
     std::string appid;
 };
 
-struct RepoOptions
-{
-    std::string repoName;
-    std::string repoUrl;
-    std::optional<std::string> repoAlias;
-    std::int64_t repoPriority{ 0 };
-};
-
 struct InspectOptions
 {
     std::string appid;
@@ -188,7 +182,7 @@ public:
     int search(const SearchOptions &options);
     int uninstall(const UninstallOptions &options);
     int list(const ListOptions &options);
-    int repo(CLI::App *subcommand, const RepoOptions &options);
+    int repo(CLI::App *subcommand, const common::cli::RepoOptions &options);
     int info(const InfoOptions &options);
     int content(const ContentOptions &options);
     int prune();
@@ -216,24 +210,19 @@ private:
     [[nodiscard]] utils::error::Result<std::vector<api::types::v1::CliContainer>>
     getCurrentContainers() const noexcept;
     int installFromFile(const QFileInfo &fileInfo,
-                        const api::types::v1::CommonOptions &commonOptions,
-                        const std::string &appid);
+                        const api::types::v1::CommonOptions &commonOptions);
     int setRepoConfig(const QVariantMap &config);
-    utils::error::Result<void> ensureAuthorized();
-    utils::error::Result<void> runningAsRoot();
-    utils::error::Result<void> runningAsRoot(const QList<QString> &args);
     utils::error::Result<std::vector<api::types::v1::UpgradeListResult>> listUpgradable();
     utils::error::Result<std::filesystem::path> ensureCache(runtime::RunContext &context) noexcept;
-    QDBusReply<void> authorization();
     void updateAM() noexcept;
     utils::error::Result<std::vector<std::string>> getRunningAppContainers(const std::string &id);
     bool isContainerIDMatch(const std::string &containerID, const std::string &shortID);
     int getLayerDir(const InspectOptions &options);
     int getBundleDir(const InspectOptions &options);
-    utils::error::Result<void> initInteraction();
     void detectDrivers();
     utils::error::Result<api::dbus::v1::PackageManager *> getPkgMan();
     utils::error::Result<void> initPkgManSignals();
+    utils::error::Result<void> syncTaskProperties();
     int runResolvedContext(runtime::RunContext &runContext,
                            const RunOptions &options,
                            std::optional<api::types::v1::RuntimeConfigure> runtimeConfig);

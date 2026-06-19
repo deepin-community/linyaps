@@ -36,6 +36,18 @@ const std::vector<std::string> buildContainerCaps = {
     "CAP_SETPCAP", "CAP_SETUID",           "CAP_SYS_CHROOT",
 };
 
+auto isPathInRootfs(const std::filesystem::path &path, const std::filesystem::path &rootfs) noexcept
+  -> bool
+{
+    auto relative = path.lexically_normal().lexically_relative(rootfs.lexically_normal());
+    if (relative.empty()) {
+        return false;
+    }
+
+    auto it = relative.begin();
+    return it == relative.end() || *it != "..";
+}
+
 auto getXDPDocumentsMountPoint() noexcept -> utils::error::Result<std::filesystem::path>
 {
     LINGLONG_TRACE("get XDP Documents mount point");
@@ -353,12 +365,12 @@ auto ContainerBuilder::finalizeContainer(PreparedContainer &prepared) noexcept
     bool useOverlayMode = true;
     bool needGenLdConf = false;
     if (prepared.mode == ContainerMode::Init) {
-        const auto &appLayer = prepared.runContext->getAppLayer();
-        if (!appLayer) {
-            return LINGLONG_ERR("app layer not found");
+        auto targetLayer = prepared.runContext->getTargetLayer();
+        if (!targetLayer) {
+            return LINGLONG_ERR("target layer not found", targetLayer);
         }
 
-        triplet = appLayer->getReference().arch.getTriplet();
+        triplet = targetLayer->get().getReference().arch.getTriplet();
         needGenLdConf = true;
     } else if (prepared.mode == ContainerMode::Build) {
         triplet = package::Architecture::currentCPUArchitecture().getTriplet();
@@ -448,6 +460,40 @@ auto ContainerBuilder::normalizeContainerRootfs(
             return LINGLONG_ERR(
               fmt::format("failed to create symlink {} -> {}", localtimePath, timezonePath),
               ec);
+        }
+    }
+
+    if (config.mounts) {
+        for (const auto &m : *config.mounts) {
+            if (!m.srcType) {
+                continue;
+            }
+            auto destPath = std::filesystem::path(m.destination);
+            auto dest = rootfs / (destPath.is_absolute() ? destPath.relative_path() : destPath);
+            if (!isPathInRootfs(dest, rootfs)) {
+                return LINGLONG_ERR(
+                  fmt::format("mount destination {} is outside rootfs {}", dest, rootfs));
+            }
+
+            std::error_code ec;
+            if (std::filesystem::exists(dest, ec)) {
+                continue;
+            }
+            if (*m.srcType == "file") {
+                std::filesystem::create_directories(dest.parent_path(), ec);
+                if (ec) {
+                    LogW("failed to create directories for mount point {}: {}",
+                         dest.parent_path(),
+                         ec.message());
+                    continue;
+                }
+                std::ofstream(dest) << "";
+            } else {
+                std::filesystem::create_directories(dest, ec);
+                if (ec) {
+                    LogW("failed to create mount point {}: {}", dest, ec.message());
+                }
+            }
         }
     }
 
@@ -620,6 +666,21 @@ auto ContainerBuilder::configureRunContainer(PreparedContainer &prepared,
     auto applyRes = runContext.setupCDIDevices(prepared.cfgBuilder, false);
     if (!applyRes) {
         return LINGLONG_ERR(applyRes);
+    }
+
+    const auto &mounts = runContext.getConfig().mounts;
+    if (mounts) {
+        for (const auto &m : *mounts) {
+            ocppi::runtime::config::types::Mount ociMount{
+                .destination = m.destination,
+                .gidMappings = {},
+                .options = m.options,
+                .source = m.source,
+                .type = m.type,
+                .uidMappings = {},
+            };
+            prepared.cfgBuilder.addExtraMount(ociMount);
+        }
     }
 
     return LINGLONG_OK;

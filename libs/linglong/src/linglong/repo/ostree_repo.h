@@ -31,13 +31,6 @@
 
 namespace linglong::repo {
 
-struct clearReferenceOption
-{
-    bool forceRemote = false;      // force clear remote reference
-    bool fallbackToRemote = true;  // fallback to remote if local not found
-    bool semanticMatching = false; // semantic matching compatible version
-};
-
 class RefMetaData
 {
 public:
@@ -107,7 +100,7 @@ public:
                    std::vector<std::filesystem::path> overlays = {},
                    const std::optional<std::string> &subRef = std::nullopt) noexcept;
 
-    [[nodiscard]] utils::error::Result<package::LayerDir>
+    virtual utils::error::Result<package::LayerDir>
     getLayerDir(const package::Reference &ref,
                 const std::string &module = "binary",
                 const std::optional<std::string> &subRef = std::nullopt) const noexcept;
@@ -119,15 +112,12 @@ public:
                  const std::string &url,
                  const package::Reference &reference,
                  const std::string &module = "binary") const noexcept;
-    [[nodiscard]] utils::error::Result<void> pull(service::Task &taskContext,
-                                                  const package::ReferenceWithRepo &refRepo,
-                                                  const std::string &module) noexcept;
+    [[nodiscard]] virtual utils::error::Result<void> pull(service::Task &taskContext,
+                                                          const package::ReferenceWithRepo &refRepo,
+                                                          const std::string &module) noexcept;
 
-    [[nodiscard]] virtual utils::error::Result<package::Reference>
-    clearReference(const package::FuzzyReference &fuzzy,
-                   const clearReferenceOption &opts,
-                   const std::string &module = "binary",
-                   const std::optional<std::string> &repo = std::nullopt) const noexcept;
+    [[nodiscard]] virtual utils::error::Result<package::Reference> clearReferenceLocal(
+      const package::FuzzyReference &fuzzyRef, bool semanticMatching = false) const noexcept;
 
     virtual utils::error::Result<std::vector<api::types::v1::PackageInfoV2>>
     listLocal() const noexcept;

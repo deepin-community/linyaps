@@ -15,9 +15,11 @@ pfl_add_executable(
   src/common/tempdir.h
   src/linglong/builder/config_test.cpp
   src/linglong/builder/linglong_builder_test.cpp
+  src/linglong/builder/pull_dependency_test.cpp
   src/linglong/builder/source_fetcher_test.cpp
   src/linglong/cli/cli_test.cpp
   src/linglong/common/gkeyfile_wrapper_test.cpp
+  src/linglong/common/cli/repo_test.cpp
   src/linglong/common/strings_test.cpp
   src/linglong/common/display_test.cpp
   src/linglong/common/socket_test.cpp

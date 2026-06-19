@@ -39,6 +39,8 @@ pfl_add_library(
   src/linglong/common/dbus/properties_forwarder.h
   src/linglong/common/dbus/register.cpp
   src/linglong/common/dbus/register.h
+  src/linglong/common/cli/repo.cpp
+  src/linglong/common/cli/repo.h
   src/linglong/common/formatter.cpp
   src/linglong/common/formatter.h
   src/linglong/common/gkeyfile_wrapper.h
@@ -72,6 +74,8 @@ pfl_add_library(
   src/linglong/package_manager/package_task.h
   src/linglong/package_manager/package_update.cpp
   src/linglong/package_manager/package_update.h
+  src/linglong/package_manager/polkit_authority.cpp
+  src/linglong/package_manager/polkit_authority.h
   src/linglong/package_manager/ref_installation.cpp
   src/linglong/package_manager/ref_installation.h
   src/linglong/package_manager/task.cpp

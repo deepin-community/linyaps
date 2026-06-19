@@ -31,7 +31,6 @@
 #include "linglong/common/strings.h"
 #include "linglong/package/layer_file.h"
 #include "linglong/package/reference.h"
-#include "linglong/repo/config.h"
 #include "linglong/runtime/container_builder.h"
 #include "linglong/runtime/run_context.h"
 #include "linglong/utils/bash_command_helper.h"
@@ -51,6 +50,8 @@
 #include <linux/un.h>
 #include <nlohmann/json.hpp>
 
+#include <QDBusInterface>
+#include <QDBusReply>
 #include <QEventLoop>
 #include <QFileInfo>
 #include <QProcess>
@@ -518,6 +519,8 @@ utils::error::Result<api::dbus::v1::PackageManager *> Cli::getPkgMan()
         return LINGLONG_ERR("failed to initialize package manager signals", ret.error());
     }
 
+    this->pkgMan->setTimeout(INT_MAX);
+
     return this->pkgMan.get();
 }
 
@@ -539,7 +542,7 @@ utils::error::Result<void> Cli::initPkgManSignals()
     if (!conn.connect(pkgMan->service(),
                       pkgMan->path(),
                       pkgMan->interface(),
-                      "TaskAdd",
+                      "TaskAdded",
                       this,
                       SLOT(onTaskAdded(QDBusObjectPath)))) {
         return LINGLONG_ERR("couldn't connect to package manager signal 'TaskAdded'");
@@ -552,6 +555,16 @@ utils::error::Result<void> Cli::initPkgManSignals()
                       this,
                       SLOT(onTaskRemoved(QDBusObjectPath)))) {
         return LINGLONG_ERR("couldn't connect to package manager signal 'TaskRemoved'");
+    }
+
+    if (!conn.connect(pkgMan->service(),
+                      pkgMan->path(),
+                      pkgMan->interface(),
+                      "RequestInteraction",
+                      this,
+                      SLOT(interaction(QDBusObjectPath, int, QVariantMap)))) {
+        return LINGLONG_ERR(fmt::format("Failed to connect signal RequestInteraction: {}",
+                                        conn.lastError().message().toStdString()));
     }
 
     this->pkgManSignalsInitialized = true;
@@ -616,17 +629,13 @@ int Cli::run(const RunOptions &options)
         return -1;
     }
 
-    auto curAppRef = this->repository.clearReference(*fuzzyRef,
-                                                     {
-                                                       .forceRemote = false,
-                                                       .fallbackToRemote = false,
-                                                     });
+    auto curAppRef = this->repository.clearReferenceLocal(*fuzzyRef);
     if (!curAppRef) {
         this->printer.printErr(curAppRef.error());
         return -1;
     }
 
-    auto loaded = linglong::utils::loadRuntimeConfig(options.appid);
+    auto loaded = linglong::utils::loadRuntimeConfig(options.appid, options.instance.value_or(""));
     if (!loaded) {
         this->printer.printErr(loaded.error());
         return -1;
@@ -635,14 +644,17 @@ int Cli::run(const RunOptions &options)
 
     runtime::RunContext runContext(this->repository);
     linglong::runtime::ResolveOptions opts;
-    opts.baseRef = options.base;
-    opts.runtimeRef = options.runtime;
-    // 处理多个扩展
-    if (!options.extensions.empty()) {
-        opts.extensionRefs = options.extensions;
+    if (runtimeConfig) {
+        auto cfgRes = opts.applyRuntimeConfig(*runtimeConfig);
+        if (!cfgRes) {
+            this->printer.printErr(cfgRes.error());
+            return -1;
+        }
     }
-    if (runtimeConfig && runtimeConfig->extDefs) {
-        opts.externalExtensionDefs = std::move(runtimeConfig->extDefs).value();
+    auto cliRes = opts.applyCliRunOptions(options);
+    if (!cliRes) {
+        this->printer.printErr(cliRes.error());
+        return -1;
     }
     if (!options.cdiDevices.empty()) {
         auto cdiDevices = cdi::getCDIDevices(options.cdiSpecDir, options.cdiDevices);
@@ -655,14 +667,6 @@ int Cli::run(const RunOptions &options)
         opts.cdiDevices = std::move(*autoDetectedCdiDevices);
     }
 
-    // 调整日志输出，打印扩展列表（用逗号拼接）
-    std::string extStr =
-      opts.extensionRefs ? linglong::common::strings::join(*opts.extensionRefs, ',') : "null";
-    LogD("start resolve run context with base {}, runtime {}, extensions {}",
-         opts.baseRef.value_or("null"),
-         opts.runtimeRef.value_or("null"),
-         extStr);
-
     auto res = runContext.resolve(*curAppRef, opts);
     if (!res) {
         handleCommonError(res.error());
@@ -673,13 +677,14 @@ int Cli::run(const RunOptions &options)
     LogD("RunContext Config:\n{}", nlohmann::json(runContextCfg).dump());
 
     auto containerID = runContext.getContainerId();
-    LogD("run app: {} container id: {}", curAppRef->toString(), containerID);
+    LogD("run {} with container id: {}", curAppRef->toString(), containerID);
 
-    const auto &appLayerItem = runContext.getCachedAppItem();
-    if (!appLayerItem) {
+    auto targetItem = runContext.getCachedTargetItem();
+    if (!targetItem) {
+        this->printer.printErr(LINGLONG_ERRV("failed to get cached target item", targetItem));
         return -1;
     }
-    const auto &info = appLayerItem->info;
+    const auto &info = targetItem->info;
 
     auto commands = options.commands;
     if (options.commands.empty()) {
@@ -804,7 +809,7 @@ int Cli::runWithContext(const RunOptions &options)
         return -1;
     }
 
-    auto loaded = linglong::utils::loadRuntimeConfig(options.appid);
+    auto loaded = linglong::utils::loadRuntimeConfig(options.appid, options.instance.value_or(""));
     if (!loaded) {
         this->printer.printErr(loaded.error());
         return -1;
@@ -835,20 +840,20 @@ int Cli::runResolvedContext(runtime::RunContext &runContext,
 {
     LINGLONG_TRACE("run resolved context");
 
-    auto appLayerItem = runContext.getCachedAppItem();
-    if (!appLayerItem) {
-        this->printer.printErr(LINGLONG_ERRV("failed to get cached app item"));
+    auto targetItem = runContext.getCachedTargetItem();
+    if (!targetItem) {
+        this->printer.printErr(LINGLONG_ERRV("failed to get cached target item", targetItem));
         return -1;
     }
 
     auto commands = options.commands;
     if (options.commands.empty()) {
-        commands = appLayerItem->info.command.value_or(std::vector<std::string>{ "bash" });
+        commands = targetItem->info.command.value_or(std::vector<std::string>{ "bash" });
     }
     commands = filePathMapping(commands, options);
 
     auto appCache =
-      common::dir::getContainerCacheDir(appLayerItem->commit, runContext.getContainerId());
+      common::dir::getContainerCacheDir(targetItem->commit, runContext.getContainerId());
 
     runtime::RunContainerOptions runOptions;
     runOptions.enableSecurityContext(runtime::getDefaultSecurityContexts());
@@ -995,7 +1000,9 @@ Cli::getCurrentContainers() const noexcept
 
         myContainers.emplace_back(api::types::v1::CliContainer{
           .id = std::move(info->containerID),
-          .package = std::move(info->app),
+          .package = !info->app.empty()
+            ? info->app
+            : (info->runtime && !info->runtime->empty() ? *info->runtime : info->base),
           .pid = container->pid,
         });
     }
@@ -1116,43 +1123,10 @@ void Cli::cancelCurrentTask()
 }
 
 int Cli::installFromFile(const QFileInfo &fileInfo,
-                         const api::types::v1::CommonOptions &commonOptions,
-                         const std::string &appid)
+                         const api::types::v1::CommonOptions &commonOptions)
 {
     auto filePath = fileInfo.absoluteFilePath();
     LINGLONG_TRACE(fmt::format("install from file {}", filePath.toStdString()));
-
-    auto authReply = this->authorization();
-    if (!authReply.isValid()) {
-        if (authReply.error().type() == QDBusError::AccessDenied) {
-            auto args = QCoreApplication::instance()->arguments();
-            // pkexec在0.120版本之前没有keep-cwd选项，会将目录切换到/root
-            // 所以将layer或uab文件的相对路径转为绝对路径，再传给pkexec
-            auto path = fileInfo.absoluteFilePath();
-            for (auto i = 0; i < args.length(); i++) {
-                if (args[i] == QString::fromStdString(appid)) {
-                    args[i] = path.toLocal8Bit().constData();
-                }
-            }
-
-            auto ret = this->runningAsRoot(args);
-            if (!ret) {
-                this->printer.printErr(ret.error());
-            }
-            return -1;
-        }
-
-        this->printer.printErr(LINGLONG_ERRV(
-          fmt::format("{} {}", authReply.error().message() + authReply.error().name()),
-          static_cast<int>(authReply.error().type())));
-        return -1;
-    }
-
-    auto res = this->initInteraction();
-    if (!res) {
-        this->printer.printErr(res.error());
-        return -1;
-    }
 
     LogI("install from file {}", filePath.toStdString());
     QFile file{ filePath };
@@ -1173,7 +1147,7 @@ int Cli::installFromFile(const QFileInfo &fileInfo,
     auto pendingReply = (*pkgMan)->InstallFromFile(dbusFileDescriptor,
                                                    fileInfo.suffix(),
                                                    common::serialize::toQVariantMap(commonOptions));
-    res = waitTaskCreated(pendingReply, TaskType::InstallFromFile);
+    auto res = waitTaskCreated(pendingReply, TaskType::InstallFromFile);
     if (!res) {
         this->handleCommonError(res.error());
         return -1;
@@ -1201,19 +1175,7 @@ int Cli::install(const InstallOptions &options)
 
     // 如果检测是文件，则直接安装
     if (info.exists() && info.isFile()) {
-        return installFromFile(QFileInfo{ info.absoluteFilePath() }, params.options, options.appid);
-    }
-
-    auto ret = this->ensureAuthorized();
-    if (!ret) {
-        this->printer.printErr(ret.error());
-        return -1;
-    }
-
-    ret = this->initInteraction();
-    if (!ret) {
-        this->printer.printErr(ret.error());
-        return -1;
+        return installFromFile(QFileInfo{ info.absoluteFilePath() }, params.options);
     }
 
     auto fuzzyRef = package::FuzzyReference::parse(options.appid);
@@ -1262,12 +1224,6 @@ int Cli::upgrade(const UpgradeOptions &options)
 {
     LINGLONG_TRACE("command upgrade");
 
-    auto ret = this->ensureAuthorized();
-    if (!ret) {
-        this->printer.printErr(ret.error());
-        return -1;
-    }
-
     std::vector<package::Reference> toUpgrade;
     if (!options.appid.empty()) {
         auto fuzzyRef = package::FuzzyReference::parse(options.appid);
@@ -1276,11 +1232,7 @@ int Cli::upgrade(const UpgradeOptions &options)
             return -1;
         }
 
-        auto localRef = this->repository.clearReference(*fuzzyRef,
-                                                        {
-                                                          .forceRemote = false,
-                                                          .fallbackToRemote = false,
-                                                        });
+        auto localRef = this->repository.clearReferenceLocal(*fuzzyRef);
         if (!localRef) {
             this->printer.printMessage(
               fmt::format(_("Application {} is not installed."), options.appid));
@@ -1463,12 +1415,6 @@ int Cli::prune()
 {
     LINGLONG_TRACE("command prune");
 
-    auto ret = this->ensureAuthorized();
-    if (!ret) {
-        this->printer.printErr(ret.error());
-        return -1;
-    }
-
     QEventLoop loop;
     QString jobIDReply = "";
     auto pkgMan = this->getPkgMan();
@@ -1517,12 +1463,6 @@ int Cli::prune()
 int Cli::uninstall(const UninstallOptions &options)
 {
     LINGLONG_TRACE("command uninstall");
-
-    auto ret = this->ensureAuthorized();
-    if (!ret) {
-        this->printer.printErr(ret.error());
-        return -1;
-    }
 
     auto fuzzyRef = package::FuzzyReference::parse(options.appid);
     if (!fuzzyRef) {
@@ -1625,187 +1565,68 @@ utils::error::Result<std::vector<api::types::v1::UpgradeListResult>> Cli::listUp
     return upgradeList;
 }
 
-int Cli::repo(CLI::App *app, const RepoOptions &options)
+int Cli::repo(CLI::App *app, const common::cli::RepoOptions &options)
 {
-    LINGLONG_TRACE("command repo");
+    common::cli::RepoConfigBackend backend{
+        .getConfig = [this]() -> utils::error::Result<api::types::v1::RepoConfigV2> {
+            LINGLONG_TRACE("get repo config from package manager");
 
-    auto pkgMan = this->getPkgMan();
-    if (!pkgMan) {
-        this->printer.printErr(pkgMan.error());
-        return -1;
-    }
+            auto pkgMan = this->getPkgMan();
+            if (!pkgMan) {
+                return LINGLONG_ERR(pkgMan);
+            }
 
-    auto propCfg = (*pkgMan)->configuration();
-    if ((*pkgMan)->lastError().isValid()) {
-        auto err = LINGLONG_ERRV((*pkgMan)->lastError().message().toStdString());
-        this->printer.printErr(err);
-        return -1;
-    }
+            auto propCfg = (*pkgMan)->configuration();
+            if ((*pkgMan)->lastError().isValid()) {
+                return LINGLONG_ERR((*pkgMan)->lastError().message().toStdString());
+            }
 
-    auto cfg = common::serialize::fromQVariantMap<api::types::v1::RepoConfigV2>(propCfg);
-    if (!cfg) {
-        LogE("fatal error: {}", cfg.error());
-        std::abort();
-    }
+            auto cfg = common::serialize::fromQVariantMap<api::types::v1::RepoConfigV2>(propCfg);
+            if (!cfg) {
+                return LINGLONG_ERR("failed to parse repo config", cfg.error());
+            }
 
-    auto argsParsed = [&app](const std::string &name) -> bool {
-        return app->get_subcommand(name)->parsed();
+            return *cfg;
+        },
+        .setConfig = [this](const api::types::v1::RepoConfigV2 &cfg) -> utils::error::Result<void> {
+            LINGLONG_TRACE("set repo config to package manager");
+
+            auto ret = this->setRepoConfig(common::serialize::toQVariantMap(cfg));
+            if (ret != 0) {
+                return LINGLONG_ERR("failed to set repo config");
+            }
+            return LINGLONG_OK;
+        },
     };
 
-    if (argsParsed("show")) {
-        this->printer.printRepoConfig(*cfg);
-        return 0;
-    }
-
-    if (argsParsed("modify")) {
-        this->printer.printErr(
-          LINGLONG_ERRV("sub-command 'modify' already has been deprecated, please use sub-command "
-                        "'add' to add a remote repository and use it as default."));
-        return EINVAL;
-    }
-
-    std::string url = options.repoUrl;
-
-    if (argsParsed("add") || argsParsed("update")) {
-        if (url.rfind("http", 0) != 0) {
-            this->printer.printErr(LINGLONG_ERRV(fmt::format("url is invalid: {}", url)));
-            return EINVAL;
-        }
-
-        // remove last slash
-        if (url.back() == '/') {
-            url.pop_back();
-        }
-    }
-
-    std::string name = options.repoName;
-    // if alias is not set, use name as alias
-    std::string alias = options.repoAlias.value_or(name);
-    auto &cfgRef = *cfg;
-
-    if (argsParsed("add")) {
-        if (url.empty()) {
-            this->printer.printErr(LINGLONG_ERRV("url is empty."));
-            return EINVAL;
-        }
-
-        bool isExist =
-          std::any_of(cfgRef.repos.begin(), cfgRef.repos.end(), [&alias](const auto &repo) {
-              return repo.alias.value_or(repo.name) == alias;
-          });
-        if (isExist) {
-            this->printer.printErr(LINGLONG_ERRV(fmt::format("repo {} already exist", alias)));
-            return -1;
-        }
-        cfgRef.repos.push_back(api::types::v1::Repo{
-          .alias = options.repoAlias,
-          .name = name,
-          .priority = 0,
-          .url = url,
-        });
-        return this->setRepoConfig(common::serialize::toQVariantMap(cfgRef));
-    }
-
-    auto existingRepo =
-      std::find_if(cfgRef.repos.begin(), cfgRef.repos.end(), [&alias](const auto &repo) {
-          return repo.alias.value_or(repo.name) == alias;
-      });
-
-    if (existingRepo == cfgRef.repos.end()) {
-        this->printer.printErr(
-          LINGLONG_ERRV(fmt::format("the operated repo {} doesn't exist", name)));
+    auto ret = common::cli::handleRepoCommand(app,
+                                              options,
+                                              backend,
+                                              { .showConfig = [this](const auto &cfg) {
+                                                  this->printer.printRepoConfig(cfg);
+                                              } });
+    if (!ret) {
+        this->printer.printErr(ret.error());
         return -1;
     }
 
-    if (argsParsed("remove")) {
-        if (cfgRef.repos.size() == 1) {
-            this->printer.printErr(
-              LINGLONG_ERRV(fmt::format("repo {} is the only repo, please add another repo before "
-                                        "removing it or update it directly.",
-                                        alias)));
-            return -1;
-        }
-        cfgRef.repos.erase(existingRepo);
-
-        if (cfgRef.defaultRepo == alias) {
-            // choose the max priority repo as default repo
-            auto maxPriority = linglong::repo::getRepoMaxPriority(cfgRef);
-            for (auto &repo : cfgRef.repos) {
-                if (repo.priority == maxPriority) {
-                    cfgRef.defaultRepo = repo.alias.value_or(repo.name);
-                    break;
-                }
-            }
-        }
-
-        return this->setRepoConfig(common::serialize::toQVariantMap(cfgRef));
-    }
-
-    if (argsParsed("update")) {
-        if (url.empty()) {
-            this->printer.printErr(LINGLONG_ERRV("url is empty."));
-            return -1;
-        }
-
-        existingRepo->url = url;
-        return this->setRepoConfig(common::serialize::toQVariantMap(cfgRef));
-    }
-
-    if (argsParsed("enable-mirror")) {
-        existingRepo->mirrorEnabled = true;
-        return this->setRepoConfig(common::serialize::toQVariantMap(cfgRef));
-    }
-
-    if (argsParsed("disable-mirror")) {
-        existingRepo->mirrorEnabled = false;
-        return this->setRepoConfig(common::serialize::toQVariantMap(cfgRef));
-    }
-
-    if (argsParsed("set-default")) {
-        if (cfgRef.defaultRepo != alias) {
-            cfgRef.defaultRepo = alias;
-            // set-default is equal to set-priority to the current max priority + 100
-            auto maxPriority = linglong::repo::getRepoMaxPriority(cfgRef);
-            for (auto &repo : cfgRef.repos) {
-                if (repo.alias.value_or(repo.name) == alias) {
-                    repo.priority = maxPriority + 100;
-                    break;
-                }
-            }
-            return this->setRepoConfig(common::serialize::toQVariantMap(cfgRef));
-        }
-
-        return 0;
-    }
-
-    if (argsParsed("set-priority")) {
-        existingRepo->priority = options.repoPriority;
-        return this->setRepoConfig(common::serialize::toQVariantMap(cfgRef));
-    }
-
-    this->printer.printErr(LINGLONG_ERRV("unknown operation"));
-    return -1;
+    return 0;
 }
 
 int Cli::setRepoConfig(const QVariantMap &config)
 {
     LINGLONG_TRACE("set repo config");
 
-    auto ret = this->ensureAuthorized();
-    if (!ret) {
-        this->printer.printErr(ret.error());
-        return -1;
-    }
-
     auto pkgMan = this->getPkgMan();
     if (!pkgMan) {
         this->printer.printErr(pkgMan.error());
         return -1;
     }
 
-    (*pkgMan)->setConfiguration(config);
-    if ((*pkgMan)->lastError().isValid()) {
-        auto err = LINGLONG_ERRV((*pkgMan)->lastError().message().toStdString());
+    auto reply = (*pkgMan)->SetConfiguration(config);
+    reply.waitForFinished();
+    if (reply.isError()) {
+        auto err = LINGLONG_ERRV(reply.error().message().toStdString());
         this->printer.printErr(err);
         return -1;
     }
@@ -1835,9 +1656,7 @@ int Cli::info(const InfoOptions &options)
             return -1;
         }
 
-        auto ref =
-          this->repository.clearReference(*fuzzyRef,
-                                          { .forceRemote = false, .fallbackToRemote = false });
+        auto ref = this->repository.clearReferenceLocal(*fuzzyRef);
         if (!ref) {
             LogD("{}", ref.error());
             this->printer.printErr(LINGLONG_ERRV("Cannot find such application.",
@@ -1891,8 +1710,7 @@ int Cli::content(const ContentOptions &options)
         return -1;
     }
 
-    auto ref = this->repository.clearReference(*fuzzyRef,
-                                               { .forceRemote = false, .fallbackToRemote = false });
+    auto ref = this->repository.clearReferenceLocal(*fuzzyRef);
     if (!ref) {
         LogD("{}", ref.error());
         this->printer.printErr(LINGLONG_ERRV("Can not find such application."));
@@ -2156,80 +1974,17 @@ void Cli::filterPackageInfosByVersion(
     }
 }
 
-utils::error::Result<void> Cli::ensureAuthorized()
-{
-    LINGLONG_TRACE("ensure authorized");
-
-    auto authReply = this->authorization();
-    if (!authReply.isValid()) {
-        if (authReply.error().type() == QDBusError::AccessDenied) {
-            auto ret = this->runningAsRoot();
-            std::string message = "failed to authorize";
-            if (!ret) {
-                message += ": " + ret.error().message();
-            }
-            return LINGLONG_ERR(message);
-        }
-
-        return LINGLONG_ERR(
-          fmt::format("{} {}", authReply.error().message(), authReply.error().name()),
-          static_cast<int>(authReply.error().type()));
-    }
-
-    return LINGLONG_OK;
-}
-
-utils::error::Result<void> Cli::runningAsRoot()
-{
-    return runningAsRoot(QCoreApplication::instance()->arguments());
-}
-
-utils::error::Result<void> Cli::runningAsRoot(const QList<QString> &args)
-{
-    LINGLONG_TRACE("run with pkexec");
-
-    const char *pkexecBin = "pkexec";
-    QStringList argv{ pkexecBin };
-    argv.append(args);
-    std::vector<char *> targetArgv;
-    for (const auto &arg : argv) {
-        QByteArray byteArray = arg.toUtf8();
-        targetArgv.push_back(strdup(byteArray.constData()));
-    }
-    LogD("run {}", fmt::join(targetArgv, " "));
-    targetArgv.push_back(nullptr);
-
-    auto ret = execvp(pkexecBin, const_cast<char **>(targetArgv.data()));
-    // NOTE: if reached here, exevpe is failed.
-    for (auto arg : targetArgv) {
-        free(arg);
-    }
-    return LINGLONG_ERR("execve error", ret);
-}
-
-QDBusReply<void> Cli::authorization()
-{
-    // Note: we have marked the method Permissions of PM as rejected.
-    // Use this method to determin that this client whether have permission to call PM.
-    auto pkgMan = this->getPkgMan();
-    if (!pkgMan) {
-        return QDBusReply<void>{ QDBusError(QDBusError::Failed, pkgMan.error().message().c_str()) };
-    }
-
-    return (*pkgMan)->Permissions();
-}
-
 utils::error::Result<std::filesystem::path> Cli::ensureCache(runtime::RunContext &context) noexcept
 {
     LINGLONG_TRACE("ensure cache via PM");
 
     const auto &containerID = context.getContainerId();
-    auto appLayerItem = context.getCachedAppItem();
-    if (!appLayerItem) {
-        return LINGLONG_ERR("failed to get cached app item");
+    auto targetItem = context.getCachedTargetItem();
+    if (!targetItem) {
+        return LINGLONG_ERR("failed to get cached target item", targetItem);
     }
 
-    auto appCache = common::dir::getContainerCacheDir(appLayerItem->commit, containerID);
+    auto appCache = common::dir::getContainerCacheDir(targetItem->commit, containerID);
     auto runContextConfigFile = appCache / ".config";
     std::error_code ec;
     if (std::filesystem::exists(runContextConfigFile, ec)) {
@@ -2337,8 +2092,7 @@ int Cli::getLayerDir(const InspectOptions &options)
         return -1;
     }
 
-    auto ref = this->repository.clearReference(*fuzzyRef,
-                                               { .forceRemote = false, .fallbackToRemote = false });
+    auto ref = this->repository.clearReferenceLocal(*fuzzyRef);
     if (!ref) {
         LogD("{}", ref.error());
         this->printer.printErr(LINGLONG_ERRV("Can not find such application."));
@@ -2383,26 +2137,27 @@ int Cli::getBundleDir(const InspectOptions &options)
     return 0;
 }
 
-utils::error::Result<void> Cli::initInteraction()
+utils::error::Result<void> Cli::syncTaskProperties()
 {
-    LINGLONG_TRACE("initInteraction");
+    LINGLONG_TRACE("syncTaskProperties");
 
     auto pkgMan = this->getPkgMan();
     if (!pkgMan) {
         return LINGLONG_ERR(pkgMan);
     }
 
-    auto conn = (*pkgMan)->connection();
-    auto con = conn.connect((*pkgMan)->service(),
-                            (*pkgMan)->path(),
-                            (*pkgMan)->interface(),
-                            "RequestInteraction",
-                            this,
-                            SLOT(interaction(QDBusObjectPath, int, QVariantMap)));
-    if (!con) {
-        return LINGLONG_ERR("Failed to connect signal: RequestInteraction");
+    QDBusInterface properties((*pkgMan)->service(),
+                              this->taskObjectPath,
+                              "org.freedesktop.DBus.Properties",
+                              (*pkgMan)->connection());
+    QDBusReply<QVariantMap> reply =
+      properties.call("GetAll", QStringLiteral("org.deepin.linglong.Task1"));
+    if (!reply.isValid()) {
+        return LINGLONG_ERR(
+          fmt::format("failed to get task properties: {}", reply.error().message().toStdString()));
     }
 
+    this->onTaskPropertiesChanged(QStringLiteral("org.deepin.linglong.Task1"), reply.value(), {});
     return LINGLONG_OK;
 }
 
@@ -2413,7 +2168,7 @@ utils::error::Result<void> Cli::waitTaskCreated(QDBusPendingReply<QVariantMap> &
 
     auto result = waitDBusReply<api::types::v1::PackageManager1PackageTaskResult>(reply);
     if (!result) {
-        return LINGLONG_ERR(result.error());
+        return LINGLONG_ERR(result);
     }
 
     auto resultCode = static_cast<utils::error::ErrorCode>(result->code);
@@ -2445,11 +2200,17 @@ utils::error::Result<void> Cli::waitTaskCreated(QDBusPendingReply<QVariantMap> &
                                         conn.lastError().message().toStdString()));
     }
 
-    return LINGLONG_OK;
+    return this->syncTaskProperties();
 }
 
 void Cli::waitTaskDone()
 {
+    if (this->taskState.state == api::types::v1::State::Failed
+        || this->taskState.state == api::types::v1::State::Canceled
+        || this->taskState.state == api::types::v1::State::Succeed) {
+        return;
+    }
+
     QEventLoop loop;
     if (QObject::connect(this, &Cli::taskDone, &loop, &QEventLoop::quit) == nullptr) {
         LogE("connect taskDone failed");
@@ -2588,6 +2349,9 @@ bool Cli::handleCommonError(const utils::error::Error &error)
         break;
     case utils::error::ErrorCode::Canceled:
         this->printer.printMessage(_("Operation canceled"));
+        break;
+    case utils::error::ErrorCode::PermissionDenied:
+        this->printer.printMessage(_("Permission denied, authentication is required"));
         break;
     default:
         this->printer.printErr(error);
