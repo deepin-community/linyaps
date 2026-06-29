@@ -1,8 +1,8 @@
-diff --git a/misc/CMakeLists.txt b/misc/CMakeLists.txt
-index 2a5046ac..d5dd7a7d 100644
---- a/misc/CMakeLists.txt
-+++ b/misc/CMakeLists.txt
-@@ -50,7 +50,8 @@ configure_files(
+Index: linyaps/misc/CMakeLists.txt
+===================================================================
+--- linyaps.orig/misc/CMakeLists.txt
++++ linyaps/misc/CMakeLists.txt
+@@ -51,7 +51,8 @@ configure_files(
    share/mime/packages/vnd.linyaps.uab.xml
    share/polkit-1/actions/org.deepin.linglong.PackageManager1.policy
    share/icons/linyaps.svg
@@ -12,7 +12,7 @@ index 2a5046ac..d5dd7a7d 100644
  
  # bash-completion
  set(BASH_COMPLETIONS_DIR ${CMAKE_INSTALL_DATADIR}/bash-completion)
-@@ -178,6 +179,10 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/share/icons/linyaps.svg
+@@ -179,6 +180,10 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR
  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/script/linglong.sh
          DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/profile.d)
  
@@ -23,14 +23,14 @@ index 2a5046ac..d5dd7a7d 100644
  install(
    FILES ${CMAKE_CURRENT_BINARY_DIR}/script/linglong.sh
    DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/X11/Xsession.d/
-diff --git a/misc/etc/linglong/config.json b/misc/etc/linglong/config.json
-new file mode 100644
-index 00000000..b85829c5
+Index: linyaps/misc/etc/linglong/config.json
+===================================================================
 --- /dev/null
-+++ b/misc/etc/linglong/config.json
-@@ -0,0 +1,5 @@
++++ linyaps/misc/etc/linglong/config.json
+@@ -0,0 +1,6 @@
 +{
 +    "device_mode": [
 +        "passthru"
-+    ]
++    ],
++    "disable_xdp": true
 +}
