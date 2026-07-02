@@ -11,15 +11,15 @@ Index: linyaps/libs/linglong/src/linglong/cli/cli.cpp
 ===================================================================
 --- linyaps.orig/libs/linglong/src/linglong/cli/cli.cpp
 +++ linyaps/libs/linglong/src/linglong/cli/cli.cpp
-@@ -1795,9 +1795,18 @@ int Cli::content(const ContentOptions &o
-         LogE("failed to check symlink {}: {}", file.c_str(), ec.message());
+@@ -1798,8 +1798,19 @@ int Cli::content(const ContentOptions &o
+     if (homeStr.back() != '/') {
+         homeStr.push_back('/');
      }
- 
--    // Dont't mapping the file under /home
--    if (auto tmp = target.string(); tmp.rfind("/home/", 0) == 0) {
+-    if (auto tmp = target.string(); tmp.rfind(homeStr, 0) == 0) {
 -        return target;
++
 +    // Do not mapping files in the following directories, which have been mounted into the container
-+    std::vector<std::string> skipMappingPaths{ "/home/",
++    std::vector<std::string> skipMappingPaths{ homeStr,
 +                                               "/persistent",
 +                                               "/media/",
 +                                               "/usr/share/icons/",
