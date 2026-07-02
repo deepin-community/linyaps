@@ -52,12 +52,14 @@ pfl_add_executable(
   src/linglong/repo/ostree_repo_test.cpp
   src/linglong/repo/repo_cache_test.cpp
   src/linglong/runtime/container_builder_test.cpp
+  src/linglong/runtime/overlayfs_driver_test.cpp
   src/linglong/runtime/run_context_test.cpp
   src/linglong/utils/bash_command_helper_test.cpp
   src/linglong/utils/cmd_test.cpp
   src/linglong/utils/error/error_test.cpp
   src/linglong/utils/file_test.cpp
   src/linglong/utils/filelock_test.cpp
+  src/linglong/utils/hooks_test.cpp
   src/linglong/utils/log.cpp
   src/linglong/utils/namespce.cpp
   src/linglong/utils/overlayfs_test.cpp

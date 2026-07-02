@@ -52,6 +52,7 @@
 
 #include <QDBusInterface>
 #include <QDBusReply>
+#include <QDBusUnixFileDescriptor>
 #include <QEventLoop>
 #include <QFileInfo>
 #include <QProcess>
@@ -463,55 +464,40 @@ utils::error::Result<api::dbus::v1::PackageManager *> Cli::getPkgMan()
         return this->pkgMan.get();
     }
 
-    if (this->peerMode) {
-        if (getuid() != 0) {
-            return LINGLONG_ERR("--no-dbus should only be used by root user.");
-        }
+    QString service;
+    QDBusConnection pkgManConn{ "ll-package-manager" };
 
+    if (this->peerMode) {
         LogW("some subcommands will failed in --no-dbus mode.");
         const auto pkgManAddress = QString("unix:path=/tmp/linglong-package-manager.socket");
-        QProcess::startDetached("sudo",
-                                { "--user",
-                                  LINGLONG_USERNAME,
-                                  "--preserve-env=QT_FORCE_STDERR_LOGGING",
-                                  "--preserve-env=QDBUS_DEBUG",
-                                  LINGLONG_LIBEXEC_DIR "/ll-package-manager",
-                                  "--no-dbus" });
-        using namespace std::chrono_literals;
-        std::this_thread::sleep_for(1s);
 
-        const auto &pkgManConn =
-          QDBusConnection::connectToPeer(pkgManAddress, "ll-package-manager");
+        pkgManConn = QDBusConnection::connectToPeer(pkgManAddress, "ll-package-manager");
         if (!pkgManConn.isConnected()) {
             return LINGLONG_ERR(fmt::format("Failed to connect to ll-package-manager: {}",
                                             pkgManConn.lastError().message().toStdString()));
         }
-
-        this->pkgMan =
-          std::make_unique<api::dbus::v1::PackageManager>("",
-                                                          "/org/deepin/linglong/PackageManager1",
-                                                          pkgManConn,
-                                                          QCoreApplication::instance());
     } else {
-        const auto &pkgManConn = QDBusConnection::systemBus();
-
-        auto peer = linglong::api::dbus::v1::DBusPeer("org.deepin.linglong.PackageManager1",
-                                                      "/org/deepin/linglong/PackageManager1",
-                                                      pkgManConn);
-        auto reply = peer.Ping();
-        reply.waitForFinished();
-        if (!reply.isValid()) {
-            return LINGLONG_ERR(
-              fmt::format("Failed to activate org.deepin.linglong.PackageManager1: {}",
-                          reply.error().message().toStdString()));
-        }
-
-        this->pkgMan =
-          std::make_unique<api::dbus::v1::PackageManager>("org.deepin.linglong.PackageManager1",
-                                                          "/org/deepin/linglong/PackageManager1",
-                                                          pkgManConn,
-                                                          QCoreApplication::instance());
+        service = "org.deepin.linglong.PackageManager1";
+        pkgManConn = QDBusConnection::systemBus();
     }
+
+    auto peer = linglong::api::dbus::v1::DBusPeer(service,
+                                                  "/org/deepin/linglong/PackageManager1",
+                                                  pkgManConn);
+    auto reply = peer.Ping();
+    reply.waitForFinished();
+    if (!reply.isValid()) {
+        const auto message = this->peerMode
+          ? "Failed to initialize peer connection: {}"
+          : "Failed to activate org.deepin.linglong.PackageManager1: {}";
+        return LINGLONG_ERR(fmt::format(message, reply.error().message().toStdString()));
+    }
+
+    this->pkgMan =
+      std::make_unique<api::dbus::v1::PackageManager>(service,
+                                                      "/org/deepin/linglong/PackageManager1",
+                                                      pkgManConn,
+                                                      QCoreApplication::instance());
 
     auto ret = this->initPkgManSignals();
     if (!ret) {
@@ -693,7 +679,7 @@ int Cli::run(const RunOptions &options)
     commands = filePathMapping(commands, options);
 
     // this lambda will dump reference of containerID, app, base and runtime to
-    // /run/linglong/getuid()/getpid() to store these needed infomation
+    // /run/linglong/getuid()/getpid() to store these needed information
     auto dumpContainerInfo = [&pidFile, &runContext, this]() -> bool {
         LINGLONG_TRACE("dump info")
         std::error_code ec;
@@ -1141,6 +1127,12 @@ int Cli::installFromFile(const QFileInfo &fileInfo,
     auto pkgMan = this->getPkgMan();
     if (!pkgMan) {
         this->printer.printErr(pkgMan.error());
+        return -1;
+    }
+
+    auto caps = (*pkgMan)->connection().connectionCapabilities();
+    if (!(caps & QDBusConnection::UnixFileDescriptorPassing)) {
+        this->printer.printErr(LINGLONG_ERRV("peer connection does not support Unix FD passing"));
         return -1;
     }
 
@@ -1795,8 +1787,18 @@ int Cli::content(const ContentOptions &options)
         LogE("failed to check symlink {}: {}", file.c_str(), ec.message());
     }
 
-    // Dont't mapping the file under /home
-    if (auto tmp = target.string(); tmp.rfind("/home/", 0) == 0) {
+    auto *homePath = ::getenv("HOME");
+    if (homePath == nullptr || homePath[0] == '\0') {
+        LogE("failed to get HOME env");
+        return target;
+    }
+
+    // Don't map files under the user's home directory
+    auto homeStr = std::string(homePath);
+    if (homeStr.back() != '/') {
+        homeStr.push_back('/');
+    }
+    if (auto tmp = target.string(); tmp.rfind(homeStr, 0) == 0) {
         return target;
     }
 
@@ -1825,7 +1827,7 @@ int Cli::content(const ContentOptions &options)
 std::vector<std::string> Cli::filePathMapping(const std::vector<std::string> &command,
                                               const RunOptions &options) const noexcept
 {
-    // FIXME: couldn't handel command like 'll-cli run org.xxx.yyy --file f1 f2 f3 org.xxx.yyy %%F'
+    // FIXME: couldn't handle command like 'll-cli run org.xxx.yyy --file f1 f2 f3 org.xxx.yyy %%F'
     // can't distinguish the boundary of command , need validate the command arguments in the future
 
     std::vector<std::string> execArgs;
@@ -1871,7 +1873,7 @@ std::vector<std::string> Cli::filePathMapping(const std::vector<std::string> &co
             continue;
         }
 
-        LogW("unkown command argument {}", arg);
+        LogW("unknown command argument {}", arg);
     }
 
     return execArgs;

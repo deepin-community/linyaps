@@ -636,8 +636,12 @@ utils::error::Result<void> RunContext::resolveOverlayMode(std::optional<std::str
         mode = *parsedMode;
     }
 
-    auto driver = OverlayFSDriver::create(mode);
-    contextCfg.overlayfs = std::string(OverlayFSDriver::modeToString(driver->mode()));
+    auto resolvedMode = OverlayFSDriver::resolveOverlayMode(mode);
+    if (!resolvedMode) {
+        return LINGLONG_ERR("resolve overlayfs mode", resolvedMode);
+    }
+
+    contextCfg.overlayfs = std::string(OverlayFSDriver::modeToString(*resolvedMode));
 
     return LINGLONG_OK;
 }
@@ -655,6 +659,10 @@ utils::error::Result<void> RunContext::resolveTimeZone()
     std::error_code ec;
     auto localtimeStatus = std::filesystem::symlink_status(localtimePath, ec);
     if (ec) {
+        if (ec == std::errc::no_such_file_or_directory) {
+            contextCfg.timezone = "UTC";
+            return LINGLONG_OK;
+        }
         return LINGLONG_ERR(fmt::format("failed to get status of {}", localtimePath), ec);
     }
 
