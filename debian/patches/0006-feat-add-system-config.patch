@@ -27,10 +27,21 @@ Index: linyaps/misc/etc/linglong/config.json
 ===================================================================
 --- /dev/null
 +++ linyaps/misc/etc/linglong/config.json
-@@ -0,0 +1,6 @@
+@@ -0,0 +1,17 @@
 +{
 +    "device_mode": [
 +        "passthru"
 +    ],
-+    "disable_xdp": true
++    "disable_xdp": true,
++    "mounts": [
++        {
++            "source": "/run/user/1000/pipewire-0",
++            "destination": "/run/user/1000/pipewire-0",
++            "type": "bind",
++            "options": [
++                "bind"
++            ],
++            "src_type": "file"
++        }
++    ]
 +}
