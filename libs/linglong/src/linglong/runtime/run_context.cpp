@@ -16,6 +16,7 @@
 
 #include <fmt/ranges.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <utility>
 
@@ -57,6 +58,34 @@ std::optional<std::string> timezoneFromPath(const std::filesystem::path &path,
     return relative.string();
 }
 
+utils::error::Result<std::vector<api::types::v1::CdiDeviceEntry>>
+filterCDIDevices(const std::vector<api::types::v1::CdiDeviceEntry> &allDevices,
+                 const std::vector<std::string> &requestedDevices)
+{
+    LINGLONG_TRACE(fmt::format("filter CDI devices {}", fmt::join(requestedDevices, ", ")));
+
+    std::vector<api::types::v1::CdiDeviceEntry> result;
+    for (const auto &deviceStr : requestedDevices) {
+        auto device = common::strings::split(deviceStr, '=');
+        if (device.size() != 2) {
+            return LINGLONG_ERR(fmt::format("invalid device format: {}", deviceStr));
+        }
+
+        auto entry = std::find_if(allDevices.begin(),
+                                  allDevices.end(),
+                                  [&device](const api::types::v1::CdiDeviceEntry &entry) {
+                                      return entry.kind == device[0] && entry.name == device[1];
+                                  });
+        if (entry == allDevices.end()) {
+            return LINGLONG_ERR(fmt::format("device not found: {}", deviceStr));
+        }
+
+        result.emplace_back(*entry);
+    }
+
+    return result;
+}
+
 } // namespace
 
 RunContext::~RunContext() = default;
@@ -64,6 +93,8 @@ RunContext::~RunContext() = default;
 auto ResolveOptions::applyRuntimeConfig(const api::types::v1::RuntimeConfigure &runtimeConfig)
   -> utils::error::Result<void>
 {
+    LINGLONG_TRACE("apply runtime config to resolve options");
+
     if (runtimeConfig.extDefs) {
         this->externalExtensionDefs = *runtimeConfig.extDefs;
     }
@@ -76,12 +107,74 @@ auto ResolveOptions::applyRuntimeConfig(const api::types::v1::RuntimeConfigure &
 auto ResolveOptions::applyCliRunOptions(const cli::RunOptions &options)
   -> utils::error::Result<void>
 {
+    LINGLONG_TRACE("apply cli run options to resolve options");
+
     this->baseRef = options.base;
+    this->cdiSpecDirs = options.cdiSpecDir;
     this->runtimeRef = options.runtime;
     if (!options.extensions.empty()) {
         this->extensionRefs = options.extensions;
     }
     this->instance = options.instance;
+    return LINGLONG_OK;
+}
+
+auto ResolveOptions::applyOptions(
+  const std::optional<api::types::v1::RuntimeConfigure> &runtimeConfig,
+  const cli::RunOptions &options) -> utils::error::Result<void>
+{
+    LINGLONG_TRACE("apply runtime config and cli run options to resolve options");
+
+    if (runtimeConfig) {
+        auto result = this->applyRuntimeConfig(*runtimeConfig);
+        if (!result) {
+            return LINGLONG_ERR(result);
+        }
+    }
+
+    auto result = this->applyCliRunOptions(options);
+    if (!result) {
+        return LINGLONG_ERR(result);
+    }
+
+    this->cdiDevices.reset();
+    std::optional<std::vector<std::string>> requestedCDIDevices;
+    if (!options.cdiDevices.empty()) {
+        requestedCDIDevices = options.cdiDevices;
+    } else if (runtimeConfig && runtimeConfig->devices) {
+        requestedCDIDevices = runtimeConfig->devices;
+    }
+
+    if (requestedCDIDevices && requestedCDIDevices->empty()) {
+        this->cdiDevices = std::vector<api::types::v1::CdiDeviceEntry>{};
+        return LINGLONG_OK;
+    }
+
+    auto allCDIDevices = cdi::getCDIDevices(this->cdiSpecDirs, std::nullopt);
+    if (!allCDIDevices) {
+        return LINGLONG_ERR(allCDIDevices);
+    }
+
+    if (requestedCDIDevices) {
+        auto devices = filterCDIDevices(*allCDIDevices, *requestedCDIDevices);
+        if (!devices) {
+            return LINGLONG_ERR(devices);
+        }
+        this->cdiDevices = std::move(*devices);
+        return LINGLONG_OK;
+    }
+
+    auto nvidiaAllDevice =
+      std::find_if(allCDIDevices->begin(),
+                   allCDIDevices->end(),
+                   [](const api::types::v1::CdiDeviceEntry &device) {
+                       return device.kind == "nvidia.com/gpu" && device.name == "all";
+                   });
+    if (nvidiaAllDevice != allCDIDevices->end()) {
+        LogD("{}={} detected", nvidiaAllDevice->kind, nvidiaAllDevice->name);
+        this->cdiDevices = std::vector<api::types::v1::CdiDeviceEntry>{ *nvidiaAllDevice };
+    }
+
     return LINGLONG_OK;
 }
 
@@ -214,7 +307,7 @@ utils::error::Result<void> RunContext::resolve(const linglong::package::Referenc
     }
 
     // all reference are cleard , we can get actual layer directory now
-    return resolveLayer(opts.depsBinaryOnly, opts.appModules.value_or(std::vector<std::string>{}));
+    return resolveLayer(opts.depsExcludeDev, opts.appModules.value_or(std::vector<std::string>{}));
 }
 
 utils::error::Result<void> RunContext::resolve(const api::types::v1::BuilderProject &target,
@@ -502,7 +595,7 @@ utils::error::Result<void> RunContext::setupCDIDevices(generator::ContainerCfgBu
     return LINGLONG_OK;
 }
 
-utils::error::Result<void> RunContext::resolveLayer(bool depsBinaryOnly,
+utils::error::Result<void> RunContext::resolveLayer(bool depsExcludeDev,
                                                     const std::vector<std::string> &appModules)
 {
     LINGLONG_TRACE("resolve layers");
@@ -515,24 +608,28 @@ utils::error::Result<void> RunContext::resolveLayer(bool depsBinaryOnly,
         }
     }
 
-    std::vector<std::string> depsModules;
-    if (depsBinaryOnly) {
-        depsModules.emplace_back("binary");
+    std::optional<std::vector<std::string>> depsExcludeModules;
+    if (depsExcludeDev) {
+        depsExcludeModules = std::vector<std::string>{ "develop" };
     }
-    auto ref = baseLayer->resolveLayer(depsModules, subRef);
+    auto ref = baseLayer->resolveLayer(std::nullopt, depsExcludeModules, subRef);
     if (!ref.has_value()) {
         return LINGLONG_ERR("failed to resolve base layer", ref);
     }
 
     if (appLayer) {
-        auto ref = appLayer->resolveLayer(appModules);
+        std::optional<std::vector<std::string>> appIncludeModules;
+        if (!appModules.empty()) {
+            appIncludeModules = appModules;
+        }
+        auto ref = appLayer->resolveLayer(appIncludeModules);
         if (!ref.has_value()) {
             return LINGLONG_ERR("failed to resolve app layer", ref);
         }
     }
 
     if (runtimeLayer) {
-        auto ref = runtimeLayer->resolveLayer(depsModules, subRef);
+        auto ref = runtimeLayer->resolveLayer(std::nullopt, depsExcludeModules, subRef);
         if (!ref.has_value()) {
             return LINGLONG_ERR("failed to resolve runtime layer", ref);
         }
@@ -573,10 +670,10 @@ utils::error::Result<void> RunContext::resolveLayer(bool depsBinaryOnly,
                 defaultValue = allowed->second;
             }
 
-            std::string res =
-              common::strings::replaceSubstring(env.second,
-                                                "$PREFIX",
-                                                "/opt/extensions/" + ext.getReference().id);
+            std::string res = common::strings::replaceSubstring(
+              env.second,
+              "$PREFIX",
+              generator::ContainerCfgBuilder::extensionMountPoint(ext.getReference().id).string());
             auto &value = environment[env.first];
             if (value.empty()) {
                 value = defaultValue;
@@ -794,7 +891,7 @@ RunContext::makeManualExtensionDefine(const std::vector<std::string> &refs)
         }
 
         extDefs.emplace_back(api::types::v1::ExtensionDefine{
-          .directory = "/opt/extensions/" + fuzzyRef->id,
+          .directory = generator::ContainerCfgBuilder::extensionMountPoint(fuzzyRef->id).string(),
           .name = fuzzyRef->id,
           .version = fuzzyRef->version.value_or(""),
         });
@@ -906,7 +1003,7 @@ utils::error::Result<void> RunContext::fillContextCfg(
     std::vector<ocppi::runtime::config::types::Mount> extensionMounts{};
     if (extensionOutput) {
         extensionMounts.push_back(ocppi::runtime::config::types::Mount{
-          .destination = "/opt/extensions/" + targetId,
+          .destination = generator::ContainerCfgBuilder::extensionMountPoint(targetId),
           .gidMappings = {},
           .options = { { "rbind" } },
           .source = extensionOutput,
@@ -934,7 +1031,7 @@ utils::error::Result<void> RunContext::fillContextCfg(
             continue;
         }
         extensionMounts.push_back(ocppi::runtime::config::types::Mount{
-          .destination = "/opt/extensions/" + name,
+          .destination = generator::ContainerCfgBuilder::extensionMountPoint(name),
           .gidMappings = {},
           .options = { { "rbind", "ro" } },
           .source = ext.getLayerDir()->filesDirPath(),

@@ -12,8 +12,6 @@
 #include "linglong/cli/terminal_notifier.h"
 #include "linglong/common/error.h"
 #include "linglong/common/global/initialize.h"
-#include "linglong/repo/config.h"
-#include "linglong/repo/ostree_repo.h"
 #include "linglong/runtime/container_builder.h"
 #include "linglong/utils/finally/finally.h"
 #include "linglong/utils/gettext.h"
@@ -48,26 +46,6 @@ using namespace linglong::package;
 using namespace linglong::cli;
 
 namespace {
-
-void startProcess(const QString &program, const QStringList &args = {})
-{
-    QProcess process;
-    auto envs = process.environment();
-    envs.push_back("QT_FORCE_STDERR_LOGGING=1");
-    process.setEnvironment(envs);
-    process.setProgram(program);
-    process.setArguments(args);
-
-    qint64 pid = 0;
-    process.startDetached(&pid);
-
-    LogD("start {} {} as {}", program.toStdString(), args.join(" ").toStdString(), pid);
-
-    QObject::connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, [pid]() {
-        LogD("kill {}", pid);
-        kill(pid, SIGTERM);
-    });
-}
 
 std::vector<std::string> transformOldExec(int argc, char **argv) noexcept
 {
@@ -201,6 +179,11 @@ ll-cli run org.deepin.demo -- bash -x /path/to/bash/script)"));
                  runOptions.disableXdp,
                  _("Enable or disable xdg-desktop-portal related integration inside the sandbox"))
       ->take_last();
+    cliRun
+      ->add_flag("--enable-pipewire",
+                 runOptions.enablePipewireSocketMount,
+                 _("Enable PipeWire socket mount inside the sandbox"))
+      ->take_last();
     cliRun->add_option("--run-context", runOptions.runContext, _("Run context json string"))
       ->group("");
     cliRun
@@ -230,16 +213,41 @@ ll-cli run org.deepin.demo -- bash -x /path/to/bash/script)"));
                    _("Specify the container instance name for reuse or identification"))
       ->type_name("NAME")
       ->check(validatorString);
+    auto *debugOpt =
+      cliRun->add_flag("--debug", runOptions.debug, _("Run the application under gdbserver"));
+    cliRun
+      ->add_option("--debug-listen",
+                   runOptions.debugListen,
+                   _("Specify the gdbserver listen address"))
+      ->type_name("ADDR")
+      ->check(validatorString)
+      ->capture_default_str()
+      ->needs(debugOpt);
+    cliRun
+      ->add_option("--debug-debuginfod",
+                   runOptions.debugDebuginfod,
+                   _("Specify debuginfod urls for debugging"))
+      ->type_name("URLS")
+      ->check(validatorString)
+      ->needs(debugOpt);
+    cliRun
+      ->add_option("--debug-symbol-dir",
+                   runOptions.debugSymbolDir,
+                   _("Specify the directory used by gdb to load debug symbols"))
+      ->type_name("DIR")
+      ->check(validatorString)
+      ->needs(debugOpt);
     cliRun->add_option("COMMAND", runOptions.commands, _("Run commands in a running sandbox"));
 }
 
 // Function to add the ps subcommand
-void addPsCommand(CLI::App &commandParser, const std::string &group)
+void addPsCommand(CLI::App &commandParser, PsOptions &psOptions, const std::string &group)
 {
-    commandParser.add_subcommand("ps", _("List running applications"))
-      ->fallthrough()
-      ->group(group)
-      ->usage(_("Usage: ll-cli ps [OPTIONS]"));
+    auto *cliPs = commandParser.add_subcommand("ps", _("List running applications"))
+                    ->fallthrough()
+                    ->group(group);
+    cliPs->add_flag("--no-truncated", psOptions.noTruncate, _("Do not truncate container IDs"));
+    cliPs->usage(_("Usage: ll-cli ps [OPTIONS]"));
 }
 
 // Function to add the exec subcommand
@@ -454,6 +462,57 @@ ll-cli list --upgradable
                         "application(s), base(s) or runtime(s)"));
 }
 
+// Function to add the analyze size subcommand
+void addAnalyzeSizeCommand(CLI::App &cliAnalyze, SizeOptions &sizeOptions)
+{
+    auto *cliSize =
+      cliAnalyze.add_subcommand("size", _("Show installed module sizes and repository real size"))
+        ->fallthrough();
+    cliSize->usage(_(R"(Usage: ll-cli analyze size [OPTIONS]
+
+Example:
+# show installed module sizes
+ll-cli analyze size
+)"));
+    cliSize
+      ->add_option(
+        "--sort",
+        sizeOptions.sortBy,
+        _(R"(Sort result by specify field. One of "actual", "logical", "exclusive", "shared" or "id")"))
+      ->type_name("FIELD")
+      ->capture_default_str()
+      ->check(CLI::IsMember({ "actual", "logical", "exclusive", "shared", "id" }));
+    cliSize->add_flag("--asc", sizeOptions.ascending, _("Sort in ascending order"));
+}
+
+// Function to add the analyze subcommands
+void addAnalyzeCommand(CLI::App &commandParser,
+                       SizeOptions &sizeOptions,
+                       DependsOptions &dependsOptions,
+                       const std::string &group)
+{
+    auto *cliAnalyze = commandParser.add_subcommand("analyze", _("Analyze installed applications"))
+                         ->group(group)
+                         ->usage(_("Usage: ll-cli analyze SUBCOMMAND [OPTIONS]"));
+    cliAnalyze->require_subcommand(1);
+
+    addAnalyzeSizeCommand(*cliAnalyze, sizeOptions);
+
+    auto *cliDepends =
+      cliAnalyze->add_subcommand("depends", _("Display installed application dependency tree"))
+        ->fallthrough();
+    cliDepends->usage(_(R"(Usage: ll-cli analyze depends [APP]
+
+Example:
+# show dependency tree for all installed application(s)
+ll-cli analyze depends
+# show dependency tree for an installed application
+ll-cli analyze depends org.deepin.demo
+)"));
+    cliDepends->add_option("APP", dependsOptions.appid, _("Specify the installed application ID"))
+      ->check(validatorString);
+}
+
 // Function to add the info subcommand
 void addInfoCommand(CLI::App &commandParser, InfoOptions &infoOptions, const std::string &group)
 {
@@ -583,11 +642,14 @@ You can report bugs to the linyaps team under this project: https://github.com/O
     RunOptions runOptions{};
     EnterOptions enterOptions{};
     KillOptions killOptions{};
+    PsOptions psOptions{};
     InstallOptions installOptions{};
     UpgradeOptions upgradeOptions{};
     SearchOptions searchOptions{};
     UninstallOptions uninstallOptions{};
     ListOptions listOptions{};
+    SizeOptions sizeOptions{};
+    DependsOptions dependsOptions{};
     InfoOptions infoOptions{};
     ContentOptions contentOptions{};
     linglong::common::cli::RepoOptions repoOptions{};
@@ -601,7 +663,7 @@ You can report bugs to the linyaps team under this project: https://github.com/O
 
     // add all subcommands using the new functions
     addRunCommand(commandParser, runOptions, CliAppManagingGroup);
-    addPsCommand(commandParser, CliAppManagingGroup);
+    addPsCommand(commandParser, psOptions, CliAppManagingGroup);
     addEnterCommand(commandParser, enterOptions, CliAppManagingGroup);
     addKillCommand(commandParser, killOptions, CliAppManagingGroup);
     addInstallCommand(commandParser, installOptions, CliBuildInGroup);
@@ -609,6 +671,7 @@ You can report bugs to the linyaps team under this project: https://github.com/O
     addUpgradeCommand(commandParser, upgradeOptions, CliBuildInGroup);
     addSearchCommand(commandParser, searchOptions, CliSearchGroup);
     addListCommand(commandParser, listOptions, CliBuildInGroup);
+    addAnalyzeCommand(commandParser, sizeOptions, dependsOptions, CliBuildInGroup);
     linglong::common::cli::addRepoCommand(commandParser,
                                           repoOptions,
                                           CliRepoGroup,
@@ -708,33 +771,11 @@ You can report bugs to the linyaps team under this project: https://github.com/O
     }
 
     const bool peerMode = noDBusFlag->count() > 0;
-    if (peerMode) {
-        if (getuid() != 0) {
-            LogE("--no-dbus should only be used by root user.");
-            return -1;
-        }
-
-        startProcess("sudo",
-                     { "--user",
-                       LINGLONG_USERNAME,
-                       "--preserve-env=QT_FORCE_STDERR_LOGGING",
-                       "--preserve-env=QDBUS_DEBUG",
-                       LINGLONG_LIBEXEC_DIR "/ll-package-manager",
-                       "--no-dbus" });
-        using namespace std::chrono_literals;
-        std::this_thread::sleep_for(1s);
-    }
-    auto repo = linglong::repo::OSTreeRepo::loadFromPath(LINGLONG_ROOT);
-    if (!repo.has_value()) {
-        LogE("failed to load repo: {}", repo.error());
-        return -1;
-    }
     // create cli
     auto *cli = new linglong::cli::Cli(*printer,
                                        **ociRuntime,
                                        *containerBuilder,
                                        peerMode,
-                                       **repo,
                                        std::move(notifier),
                                        QCoreApplication::instance());
     cli->setGlobalOptions(std::move(globalOptions));
@@ -774,7 +815,7 @@ You can report bugs to the linyaps team under this project: https://github.com/O
     } else if (name == "enter") {
         result = cli->enter(enterOptions);
     } else if (name == "ps") {
-        result = cli->ps();
+        result = cli->ps(psOptions);
     } else if (name == "kill") {
         result = cli->kill(killOptions);
     } else if (name == "install") {
@@ -787,6 +828,19 @@ You can report bugs to the linyaps team under this project: https://github.com/O
         result = cli->uninstall(uninstallOptions);
     } else if (name == "list") {
         result = cli->list(listOptions);
+    } else if (name == "analyze") {
+        const auto &subcommands = (*ret)->get_subcommands();
+        auto subcommand = std::find_if(subcommands.begin(), subcommands.end(), [](CLI::App *app) {
+            return app->parsed();
+        });
+        if (subcommand != subcommands.end()) {
+            const auto &subcommandName = (*subcommand)->get_name();
+            if (subcommandName == "size") {
+                result = cli->size(sizeOptions);
+            } else if (subcommandName == "depends") {
+                result = cli->depends(dependsOptions);
+            }
+        }
     } else if (name == "info") {
         result = cli->info(infoOptions);
     } else if (name == "content") {

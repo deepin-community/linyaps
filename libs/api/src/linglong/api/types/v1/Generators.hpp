@@ -1311,7 +1311,9 @@ j["version"] = x.version;
 
 inline void from_json(const json & j, RuntimeConfigure& x) {
 x.deviceMode = get_stack_optional<std::vector<DeviceOption>>(j, "device_mode");
+x.devices = get_stack_optional<std::vector<std::string>>(j, "devices");
 x.disableXdp = get_stack_optional<bool>(j, "disable_xdp");
+x.enablePipewireSocketMount = get_stack_optional<bool>(j, "enable_pipewire");
 x.env = get_stack_optional<std::map<std::string, std::string>>(j, "env");
 x.extDefs = get_stack_optional<std::map<std::string, std::vector<ExtensionDefine>>>(j, "ext_defs");
 x.instances = get_stack_optional<std::map<std::string, RuntimeConfigure>>(j, "instances");
@@ -1323,8 +1325,14 @@ j = json::object();
 if (x.deviceMode) {
 j["device_mode"] = x.deviceMode;
 }
+if (x.devices) {
+j["devices"] = x.devices;
+}
 if (x.disableXdp) {
 j["disable_xdp"] = x.disableXdp;
+}
+if (x.enablePipewireSocketMount) {
+j["enable_pipewire"] = x.enablePipewireSocketMount;
 }
 if (x.env) {
 j["env"] = x.env;

@@ -58,12 +58,17 @@ struct RunOptions
     std::optional<std::string> workdir;
     std::vector<std::string> extensions;
     std::optional<bool> disableXdp;
+    std::optional<bool> enablePipewireSocketMount;
     bool privileged{ false };
     std::vector<std::string> capsAdd;
     std::vector<std::string> cdiSpecDir = { "/etc/cdi", "/var/run/cdi" };
     std::vector<std::string> cdiDevices;
     std::vector<api::types::v1::DeviceOption> deviceOptions;
     std::optional<std::string> instance;
+    bool debug{ false };
+    std::string debugListen{ ":2345" };
+    std::optional<std::string> debugDebuginfod;
+    std::optional<std::string> debugSymbolDir;
 };
 
 struct EnterOptions
@@ -77,6 +82,11 @@ struct KillOptions
 {
     std::string appid;
     std::string signal{ "SIGTERM" };
+};
+
+struct PsOptions
+{
+    bool noTruncate{ false };
 };
 
 struct InstallOptions
@@ -115,6 +125,17 @@ struct ListOptions
 {
     std::string type{ "all" };
     bool showUpgradeList{ false };
+};
+
+struct SizeOptions
+{
+    std::string sortBy{ "actual" };
+    bool ascending{ false };
+};
+
+struct DependsOptions
+{
+    std::string appid;
 };
 
 struct InfoOptions
@@ -168,20 +189,21 @@ public:
         ocppi::cli::CLI &ociCLI,
         runtime::ContainerBuilder &containerBuilder,
         bool peerMode,
-        repo::OSTreeRepo &repo,
         std::unique_ptr<InteractiveNotifier> &&notifier,
         QObject *parent = nullptr);
 
     int run(const RunOptions &options);
     int runWithContext(const RunOptions &options);
     int enter(const EnterOptions &options);
-    int ps();
+    int ps(const PsOptions &options);
     int kill(const KillOptions &options);
     int install(const InstallOptions &options);
     int upgrade(const UpgradeOptions &options);
     int search(const SearchOptions &options);
     int uninstall(const UninstallOptions &options);
     int list(const ListOptions &options);
+    int size(const SizeOptions &options);
+    int depends(const DependsOptions &options);
     int repo(CLI::App *subcommand, const common::cli::RepoOptions &options);
     int info(const InfoOptions &options);
     int content(const ContentOptions &options);
@@ -191,6 +213,17 @@ public:
     void cancelCurrentTask();
 
     void setGlobalOptions(const GlobalOptions &options) noexcept { this->globalOptions = options; }
+
+protected:
+    virtual utils::error::Result<repo::OSTreeRepo *> getRepo(bool forceReload = false) noexcept;
+    virtual utils::error::Result<std::unique_ptr<repo::OSTreeRepo>>
+    loadRepoFromPath(const std::filesystem::path &repoRoot) noexcept;
+    virtual utils::error::Result<void> initializeRepo() noexcept;
+    virtual utils::error::Result<api::dbus::v1::PackageManager *> getPkgMan();
+    virtual utils::error::Result<std::unique_ptr<api::dbus::v1::PackageManager>>
+    initializePeerModePackageManager();
+    virtual utils::error::Result<std::unique_ptr<api::dbus::v1::PackageManager>>
+    initializeDBusPackageManager();
 
 private:
     [[nodiscard]] static utils::error::Result<void>
@@ -217,11 +250,10 @@ private:
     void updateAM() noexcept;
     utils::error::Result<std::vector<std::string>> getRunningAppContainers(const std::string &id);
     bool isContainerIDMatch(const std::string &containerID, const std::string &shortID);
+    utils::error::Result<void> ensureBaseDevelopModule(runtime::RunContext &runContext);
     int getLayerDir(const InspectOptions &options);
     int getBundleDir(const InspectOptions &options);
     void detectDrivers();
-    utils::error::Result<api::dbus::v1::PackageManager *> getPkgMan();
-    utils::error::Result<void> initPkgManSignals();
     utils::error::Result<void> syncTaskProperties();
     int runResolvedContext(runtime::RunContext &runContext,
                            const RunOptions &options,
@@ -277,11 +309,10 @@ private:
     Printer &printer;
     ocppi::cli::CLI &ociCLI;
     runtime::ContainerBuilder &containerBuilder;
-    repo::OSTreeRepo &repository;
+    std::unique_ptr<repo::OSTreeRepo> repository;
     std::unique_ptr<InteractiveNotifier> notifier;
     bool peerMode{ false };
     std::unique_ptr<api::dbus::v1::PackageManager> pkgMan;
-    bool pkgManSignalsInitialized{ false };
     QString taskObjectPath;
     api::dbus::v1::Task1 *task{ nullptr };
     PMTaskState taskState;

@@ -1458,6 +1458,9 @@
         "disable_xdp": {
           "type": "boolean"
         },
+        "enable_pipewire": {
+          "type": "boolean"
+        },
         "mounts": {
           "type": "array",
           "items": {
@@ -1468,6 +1471,12 @@
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/RuntimeConfigure"
+          }
+        },
+        "devices": {
+          "type": "array",
+          "items": {
+            "type": "string"
           }
         }
       }
