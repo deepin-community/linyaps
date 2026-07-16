@@ -27,10 +27,11 @@ Index: linyaps/misc/etc/linglong/config.json
 ===================================================================
 --- /dev/null
 +++ linyaps/misc/etc/linglong/config.json
-@@ -0,0 +1,6 @@
+@@ -0,0 +1,7 @@
 +{
 +    "device_mode": [
 +        "passthru"
 +    ],
-+    "disable_xdp": true
++    "disable_xdp": true,
++    "enable_pipewire": true
 +}
