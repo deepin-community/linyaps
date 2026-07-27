@@ -131,8 +131,12 @@ auto RunContainerOptions::applyRuntimeConfig(
         this->disableXdp = *runtimeConfig.disableXdp;
     }
 
-    if (runtimeConfig.enablePipewireSocketMount.has_value()) {
-        this->enablePipewireSocketMount = *runtimeConfig.enablePipewireSocketMount;
+    if (runtimeConfig.enablePipewire.has_value()) {
+        this->enablePipewireSocketMount = *runtimeConfig.enablePipewire;
+    }
+
+    if (runtimeConfig.enableAtspi.has_value()) {
+        this->enableAtSpiSocketMount = *runtimeConfig.enableAtspi;
     }
 
     if (runtimeConfig.deviceMode) {
@@ -181,6 +185,10 @@ auto RunContainerOptions::applyCliRunOptions(const cli::RunOptions &options) noe
     if (options.enablePipewireSocketMount.has_value()) {
         this->enablePipewireSocketMount = *options.enablePipewireSocketMount;
     }
+
+    if (options.enableAtSpiSocketMount.has_value()) {
+        this->enableAtSpiSocketMount = *options.enableAtSpiSocketMount;
+    }
     this->privileged = options.privileged;
     this->capabilities.insert(this->capabilities.end(),
                               options.capsAdd.begin(),
@@ -223,6 +231,11 @@ auto RunContainerOptions::isDevicePassthruEnabled() const noexcept -> bool
 auto RunContainerOptions::isPipewireSocketMountEnabled() const noexcept -> bool
 {
     return this->enablePipewireSocketMount;
+}
+
+auto RunContainerOptions::isAtSpiSocketMountEnabled() const noexcept -> bool
+{
+    return this->enableAtSpiSocketMount;
 }
 
 auto RunContainerOptions::isXdpDisabled() const noexcept -> bool
@@ -608,6 +621,11 @@ auto ContainerBuilder::configureRunContainer(PreparedContainer &prepared,
         auto pwSocketPath = common::xdg::getXDGRuntimeDir() / "pipewire-0";
         prepared.cfgBuilder.enablePipewireSocketMount(
           generator::PipewireMountOption{ .hostSocketPath = std::move(pwSocketPath) });
+    }
+    if (options.isAtSpiSocketMountEnabled()) {
+        auto atSpiSocketPath = common::xdg::getXDGRuntimeDir() / "at-spi" / "bus_0";
+        prepared.cfgBuilder.enableAtSpiSocketMount(
+          generator::AtSpiMountOption{ .hostSocketPath = std::move(atSpiSocketPath) });
     }
 
     if (options.isDevicePassthruEnabled()) {

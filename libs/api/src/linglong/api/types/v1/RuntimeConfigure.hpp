@@ -40,7 +40,8 @@ struct RuntimeConfigure {
 std::optional<std::vector<DeviceOption>> deviceMode;
 std::optional<std::vector<std::string>> devices;
 std::optional<bool> disableXdp;
-std::optional<bool> enablePipewireSocketMount;
+std::optional<bool> enableAtspi;
+std::optional<bool> enablePipewire;
 std::optional<std::map<std::string, std::string>> env;
 /**
 * external extension definitions to extend the component
