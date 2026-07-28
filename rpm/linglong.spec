@@ -1,6 +1,6 @@
 %global debug_package %{nil}
 Name:           linglong
-Version:        1.12.1
+Version:        1.13.8
 Release:        1
 Summary:        Linglong Package FrameWork
 License:        LGPLv3
@@ -126,5 +126,78 @@ cd build
 %{_datadir}/%{name}/builder/uab/*
 
 %changelog
-* Thu Apr 25 2024 chenhuixing <chenhuixing@deepin.org> - 1.4.3-1
-- Init project
+* Thu Jul 16 2026 dengbo <dengbo@deepin.org> - 1.13.8-1
+- fix: avoid missing task state if task is removed quickly
+- feat: embed prerelease and build metadata in version string
+- fix: fall back to copy when hard link fails during UAB export
+- feat: add PipeWire socket mount support for sandbox
+- refactor: make runtime config loading accept custom config dirs
+- fix: don't mount /etc/passwd and /etc/group in build mode
+- fix: ensure XDG_RUNTIME_DIR is set for namespaced child process
+- fix: add rslave propagation to bind mounts
+- feat: add disable_xdp option to system config
+- fix: /persistent can not write
+- feat: add /persistent mount
+* Thu Jul 02 2026 dengbo <dengbo@deepin.org> - 1.13.4-1
+- fix(cli): use HOME env instead of hardcoded "/home/" path prefix check
+- fix: fix fd marshaling in QtDBus
+- fix: ll-package-manager process start abnormal
+* Tue Jun 30 2026 dengbo <dengbo@deepin.org> - 1.13.3-1
+- feat: avoid duplicate ll-package-manager startup by checking existing connection
+- fix: retry cache removal after modify directory permissions
+* Thu Jun 25 2026 dengbo <dengbo@deepin.org> - 1.13.2-1
+- fix: parse install hook lines with proper quote handling
+* Wed Jun 24 2026 dengbo <dengbo@deepin.org> - 1.13.1-1
+- fix: start package manager before repo loading in peer mode
+- fix: make tests pass without /etc/localtime
+* Thu Jun 18 2026 dengbo <dengbo@deepin.org> - 1.13.0-1
+- feat: add RISC-V 64 architecture support
+- feat: add instance-specific config
+- feat: support run command in runtime or base environment
+- feat: custom user/group content exposed in container
+- feat: auto-detect NVIDIA GPU via CDI
+- feat: support system-wide runtime configuration
+- feat: add --disable-xdp flag to disable xdp integration
+- feat(oci): enable xdg-desktop-portal for GTK/Qt apps by default
+- feat: add device passthru mode
+- feat: support CDI device
+- feat: add RunContextConfig
+- feat: add shell completion files for ll-builder
+- feat(dbus): implement standard-compliant address parsing
+- refactor: use overlayfs
+- refactor: redesign prune logic
+- refactor: redesign overlayfs API and add coverage
+- refactor: add polkit authorization to PM
+- refactor: remove monolithic clearReference
+- refactor: unify repo command handling in cli and builder
+- refactor: fix compiler warnings across runtime and utils
+- fix: build run use current uid/gid
+- fix: resolve extension definitions from config
+- fix: auto-disable XDP for non-conforming apps
+- fix: correct xdp document fuse mount option
+- fix: improve XOrg display handling
+- fix: enter container error
+- fix: improve desktop file path resolution
+- fix: follow symlinks when iterating entries directory
+- fix: register QDBusObjectPath meta type explicitly
+- fix: remove incorrect use of std::move
+- fix: exclude systemd files from merge output
+* Wed May 20 2026 dengbo <dengbo@deepin.org> - 1.12.4-1
+- fix: include config.json in debian package install
+- feat: add system config for device mode
+- feat: update polkit requirement for linglong-bin
+* Fri Apr 24 2026 dengbo <dengbo@deepin.org> - 1.12.3-1
+- refactor: redesign prune logic
+- feat(dbus): implement standard-compliant address parsing
+- fix: follow symlinks when iterating entries directory
+- fix: enter container error
+- fix: register QDBusObjectPath meta type explicitly
+- refactor: split repo load/create
+- repo: add fallback when ostree_commit_get_object_sizes is unavailable
+* Sat Mar 21 2026 dengbo <dengbo@deepin.org> - 1.12.2-1
+- feat: add RISC-V 64 architecture support
+- fix: improve XOrg display handling
+- fix: improve desktop file path resolution in content command
+- fix: exclude systemd files from merge output
+- feat: add shell completion files for ll-builder
+- fix: remove incorrect use of std::move

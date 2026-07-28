@@ -1,3 +1,114 @@
+linglong (1.13.8-1) unstable; urgency=medium
+
+  * fix: avoid missing task state if task is removed quickly
+  * feat: embed prerelease and build metadata in version string
+  * fix: fall back to copy when hard link fails during UAB export
+  * feat: add PipeWire socket mount support for sandbox
+  * refactor: make runtime config loading accept custom config dirs
+  * fix: don't mount /etc/passwd and /etc/group in build mode
+  * fix: ensure XDG_RUNTIME_DIR is set for namespaced child process
+  * fix: add rslave propagation to bind mounts
+  * feat: add disable_xdp option to system config
+  * fix: /persistent can not write
+  * feat: add /persistent mount
+
+ -- dengbo <dengbo@deepin.org>  Thu, 16 Jul 2026 21:08:23 +0800
+
+linglong (1.13.4-1) unstable; urgency=medium
+
+  * fix(cli): use HOME env instead of hardcoded "/home/" path prefix check
+  * fix: fix fd marshaling in QtDBus
+  * fix: ll-package-manager process start abnormal
+
+ -- dengbo <dengbo@deepin.org>  Thu, 02 Jul 2026 10:30:00 +0800
+
+linglong (1.13.3-1) unstable; urgency=medium
+
+  * feat: avoid duplicate ll-package-manager startup by checking existing connection
+  * fix: retry cache removal after modify directory permissions
+
+ -- dengbo <dengbo@deepin.org>  Tue, 30 Jun 2026 09:49:13 +0800
+
+linglong (1.13.2-1) unstable; urgency=medium
+
+  * fix: parse install hook lines with proper quote handling
+
+ -- dengbo <dengbo@deepin.org>  Thu, 25 Jun 2026 14:06:38 +0800
+
+linglong (1.13.1-1) unstable; urgency=medium
+
+  * fix: start package manager before repo loading in peer mode
+  * fix: make tests pass without /etc/localtime
+
+ -- dengbo <dengbo@deepin.org>  Wed, 24 Jun 2026 22:56:00 +0800
+
+linglong (1.13.0-1) unstable; urgency=medium
+
+  * feat: add RISC-V 64 architecture support
+  * feat: add instance-specific config
+  * feat: support run command in runtime or base environment
+  * feat: custom user/group content exposed in container
+  * feat: auto-detect NVIDIA GPU via CDI
+  * feat: support system-wide runtime configuration
+  * feat: add --disable-xdp flag to disable xdp integration
+  * feat(oci): enable xdg-desktop-portal for GTK/Qt apps by default
+  * feat: add device passthru mode
+  * feat: support CDI device
+  * feat: add RunContextConfig
+  * feat: add shell completion files for ll-builder
+  * feat(dbus): implement standard-compliant address parsing
+  * refactor: use overlayfs
+  * refactor: redesign prune logic
+  * refactor: redesign overlayfs API and add coverage
+  * refactor: add polkit authorization to PM
+  * refactor: remove monolithic clearReference
+  * refactor: unify repo command handling in cli and builder
+  * refactor: fix compiler warnings across runtime and utils
+  * fix: build run use current uid/gid
+  * fix: resolve extension definitions from config
+  * fix: auto-disable XDP for non-conforming apps
+  * fix: correct xdp document fuse mount option
+  * fix: improve XOrg display handling
+  * fix: enter container error
+  * fix: improve desktop file path resolution
+  * fix: follow symlinks when iterating entries directory
+  * fix: register QDBusObjectPath meta type explicitly
+  * fix: remove incorrect use of std::move
+  * fix: exclude systemd files from merge output
+
+ -- dengbo <dengbo@deepin.org>  Thu, 18 Jun 2026 18:41:21 +0800
+
+linglong (1.12.4-1) unstable; urgency=medium
+
+  * fix: include config.json in debian package install
+  * feat: add system config for device mode
+  * feat: update polkit requirement for linglong-bin
+
+ -- dengbo <dengbo@deepin.org>  Wed, 20 May 2026 19:02:33 +0800
+
+linglong (1.12.3-1) unstable; urgency=medium
+
+  * refactor: redesign prune logic
+  * feat(dbus): implement standard-compliant address parsing
+  * fix: follow symlinks when iterating entries directory
+  * fix: enter container error
+  * fix: register QDBusObjectPath meta type explicitly
+  * refactor: split repo load/create
+  * repo: add fallback when ostree_commit_get_object_sizes is unavailable
+
+ -- dengbo <dengbo@deepin.org>  Fri, 24 Apr 2026 19:24:16 +0800
+
+linglong (1.12.2-1) unstable; urgency=medium
+
+  * feat: add RISC-V 64 architecture support
+  * fix: improve XOrg display handling
+  * fix: improve desktop file path resolution in content command
+  * fix: exclude systemd files from merge output
+  * feat: add shell completion files for ll-builder
+  * fix: remove incorrect use of std::move
+
+ -- dengbo <dengbo@deepin.org>  Sat, 21 Mar 2026 21:20:52 +0800
+
 linglong (1.12.1-1) unstable; urgency=medium
 
   * release 1.12.1-1.
