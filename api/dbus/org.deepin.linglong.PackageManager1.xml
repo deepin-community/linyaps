@@ -49,11 +49,6 @@ SPDX-License-Identifier: LGPL-3.0-or-later
       <arg direction="out" name="result" type="a{sv}" />
       <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="QVariantMap" />
     </method>
-    <signal name="SearchFinished">
-      <arg name="taskID" type="s" />
-      <arg name="result" type="a{sv}" />
-      <annotation name="org.qtproject.QtDBus.QtTypeName.Out1" value="QVariantMap" />
-    </signal>
     <signal name="PruneFinished">
       <arg name="taskID" type="s" />
       <arg name="result" type="a{sv}" />
@@ -67,28 +62,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
       <arg direction="in" name="parameters" type="a{sv}" />
       <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="QVariantMap" />
     </method>
-    <method name="ReplyInteraction">
-      <arg direction="in" name="task" type="o" />
-      <arg direction="in" name="replies" type="a{sv}" />
-      <annotation name="org.qtproject.QtDBus.QtTypeName.In1" value="QVariantMap" />
-    </method>
     <property name="Configuration" type="a{sv}" access="read">
       <annotation name="org.qtproject.QtDBus.QtTypeName" value="QVariantMap" />
     </property>
-    <signal name="TaskAdded">
-      <arg name="task" type="o" />
-    </signal>
-    <signal name="TaskRemoved">
-      <arg name="task" type="o" />
-      <arg name="state" type="i" />
-      <arg name="code" type="i" />
-      <arg name="message" type="s" />
-    </signal>
-    <signal name="RequestInteraction">
-      <arg name="task" type="o" />
-      <arg name="messageID" type="i" />
-      <arg name="additionalMessage" type="a{sv}" />
-      <annotation name="org.qtproject.QtDBus.QtTypeName.Out2" value="QVariantMap" />
-    </signal>
   </interface>
 </node>

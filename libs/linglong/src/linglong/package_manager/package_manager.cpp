@@ -9,7 +9,6 @@
 #include "configure.h"
 #include "linglong/api/types/helper.h"
 #include "linglong/api/types/v1/Generators.hpp" // IWYU pragma: keep
-#include "linglong/api/types/v1/InteractionReply.hpp"
 #include "linglong/api/types/v1/PackageInfoV2.hpp"
 #include "linglong/api/types/v1/PackageManager1JobInfo.hpp"
 #include "linglong/api/types/v1/PackageManager1PruneResult.hpp"
@@ -36,6 +35,7 @@
 #include "linglong/utils/error/error.h"
 #include "linglong/utils/file.h"
 #include "linglong/utils/finally/finally.h"
+#include "linglong/utils/gettext.h"
 #include "linglong/utils/hooks.h"
 #include "linglong/utils/log/log.h"
 #include "linglong/utils/namespace.h"
@@ -46,9 +46,7 @@
 
 #include <QDBusInterface>
 #include <QDBusReply>
-#include <QDBusServiceWatcher>
 #include <QDBusUnixFileDescriptor>
-#include <QEventLoop>
 #include <QMetaObject>
 #include <QTimer>
 
@@ -133,22 +131,6 @@ void PackageManager::initDaemonMode(bool peerMode) noexcept
     }
     daemonModeInitialized = true;
     m_peerMode = peerMode;
-
-    // tasks and PackageManager are on the same thread, it's safe to getTask in slot
-    QObject::connect(&tasks, &PackageTaskQueue::taskDone, this, [this](const QString &taskID) {
-        auto ret = tasks.getTask(taskID.toStdString());
-        if (!ret) {
-            LogE("get task failed: {}", ret.error());
-            return;
-        }
-
-        if (PackageTask *task = dynamic_cast<PackageTask *>(&(*ret).get()); task != nullptr) {
-            Q_EMIT TaskRemoved(QDBusObjectPath{ task->taskObjectPath().c_str() },
-                               task->getPropertyState(),
-                               task->getPropertyCode(),
-                               task->getPropertyMessage());
-        }
-    });
 
     using namespace std::chrono_literals;
     auto deferredTimeOut = 3600s;
@@ -658,7 +640,8 @@ QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd,
           PackageTask &taskRef = dynamic_cast<PackageTask &>(task);
           if (msgType == api::types::v1::InteractionMessageType::Upgrade
               && !options.skipInteraction) {
-              if (!this->waitConfirm(taskRef, msgType, additionalMessage)) {
+              if (!taskRef.requestInteraction(msgType, additionalMessage)) {
+                  taskRef.Cancel();
                   return;
               }
           }
@@ -705,45 +688,41 @@ QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd,
               return;
           }
 
+          if (info->kind == "app") {
+              auto newRef = package::Reference::fromPackageInfo(*info);
+              if (!newRef) {
+                  taskRef.reportError(std::move(newRef).error());
+                  return;
+              }
+
+              auto ret = executePostInstallHooks(*newRef);
+              if (!ret) {
+                  taskRef.reportError(std::move(ret).error());
+                  return;
+              }
+
+              if (!localRef) {
+                  auto res = applyApp(*newRef);
+                  if (!res) {
+                      taskRef.reportError(std::move(res).error());
+                      return;
+                  }
+              } else {
+                  auto modules = this->repo->getModuleList(*localRef);
+                  if (std::find(modules.cbegin(), modules.cend(), module) != modules.cend()) {
+                      ret = switchAppVersion(*localRef, *newRef, true);
+                      if (!ret) {
+                          LogE("failed to remove old reference {} after install {}: {}",
+                               localRef->toString(),
+                               packageRef.toString(),
+                               ret.error().message());
+                      }
+                  }
+              }
+          }
+
           taskRef.updateState(linglong::api::types::v1::State::Succeed,
                               "install layer successfully");
-
-          if (info->kind != "app") {
-              return;
-          }
-
-          auto newRef = package::Reference::fromPackageInfo(*info);
-          if (!newRef) {
-              taskRef.reportError(std::move(newRef).error());
-              return;
-          }
-
-          auto ret = executePostInstallHooks(*newRef);
-          if (!ret) {
-              taskRef.reportError(std::move(ret).error());
-              return;
-          }
-
-          if (!localRef) {
-              auto res = applyApp(*newRef);
-              if (!res) {
-                  taskRef.reportError(std::move(res).error());
-              }
-              return;
-          }
-
-          auto modules = this->repo->getModuleList(*localRef);
-          if (std::find(modules.cbegin(), modules.cend(), module) == modules.cend()) {
-              return;
-          }
-
-          ret = switchAppVersion(*localRef, *newRef, true);
-          if (!ret) {
-              LogE("failed to remove old reference {} after install {}: {}",
-                   localRef->toString(),
-                   packageRef.toString(),
-                   ret.error().message());
-          }
       };
 
     auto taskRet = tasks.addPackageTask(std::move(installer), ctx);
@@ -752,8 +731,7 @@ QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd,
     }
 
     auto &taskRef = taskRet->get();
-    Q_EMIT TaskAdded(QDBusObjectPath{ taskRef.taskObjectPath().c_str() });
-    taskRef.updateState(linglong::api::types::v1::State::Queued, "queued to install from layer");
+    taskRef.updateState(linglong::api::types::v1::State::Pending, "waiting to install from layer");
     return common::serialize::toQVariantMap(api::types::v1::PackageManager1PackageTaskResult{
       .taskObjectPath = taskRef.taskObjectPath(),
       .code = 0,
@@ -1065,8 +1043,7 @@ QVariantMap PackageManager::uninstallImpl(const QVariantMap &parameters,
     }
 
     auto &taskRef = taskRet->get();
-    Q_EMIT TaskAdded(QDBusObjectPath{ taskRef.taskObjectPath().c_str() });
-    taskRef.updateState(linglong::api::types::v1::State::Queued, "queued to uninstall");
+    taskRef.updateState(linglong::api::types::v1::State::Pending, "waiting to uninstall");
     return common::serialize::toQVariantMap(api::types::v1::PackageManager1PackageTaskResult{
       .taskObjectPath = taskRef.taskObjectPath(),
       .code = 0,
@@ -1107,9 +1084,6 @@ utils::error::Result<void> PackageManager::Uninstall(PackageTask &taskContext,
         return LINGLONG_ERR(res);
     }
 
-    taskContext.updateState(linglong::api::types::v1::State::Succeed,
-                            fmt::format("Uninstall {} {} success", ref.toString(), module));
-
     auto mergeRet = this->repo->mergeModules();
     if (!mergeRet.has_value()) {
         LogE("merge modules failed: {}", mergeRet.error());
@@ -1119,6 +1093,9 @@ utils::error::Result<void> PackageManager::Uninstall(PackageTask &taskContext,
     if (!pruneRet) {
         return LINGLONG_ERR(pruneRet);
     }
+
+    taskContext.updateState(linglong::api::types::v1::State::Succeed,
+                            fmt::format("Uninstall {} {} success", ref.toString(), module));
 
     return LINGLONG_OK;
 }
@@ -1345,19 +1322,29 @@ auto PackageManager::Search(const QVariantMap &parameters) noexcept -> QVariantM
         return toDBusReply(paras);
     }
 
-    auto task =
-      m_search_queue.addPackageTask([this, params = std::move(paras).value()](Task &task) {
+    const auto searchID = paras->id;
+    auto task = m_search_queue.addPackageTask(
+      [this, params = std::move(*paras)](Task &task) {
+          auto &packageTask = dynamic_cast<PackageTask &>(task);
+          task.updateState(api::types::v1::State::Processing,
+                           fmt::format("searching {}", params.id));
           std::map<std::string, std::vector<api::types::v1::PackageInfoV2>> pkgs;
           for (const auto &repoAlias : params.repos) {
+              task.updateStateMessage(fmt::format("searching {} from {}", params.id, repoAlias));
               auto repoRet = this->repo->getRepoByAlias(repoAlias);
               if (!repoRet) {
                   LogW("repo {} not found", repoAlias);
+                  task.sendMessage(fmt::format(_("repo {} not found"), repoAlias));
                   continue;
               }
 
               auto pkgInfosRet = this->repo->searchRemote(params.id, *repoRet);
               if (!pkgInfosRet) {
                   LogW("failed to search remote: {}", pkgInfosRet.error());
+                  task.sendMessage(fmt::format(_("failed to search {} from {}: {}"),
+                                               params.id,
+                                               repoAlias,
+                                               pkgInfosRet.error()));
                   continue;
               }
 
@@ -1368,29 +1355,28 @@ auto PackageManager::Search(const QVariantMap &parameters) noexcept -> QVariantM
               pkgs.emplace(repoRet->alias.value_or(repoRet->name), std::move(*pkgInfosRet));
           }
 
-          Q_EMIT this->SearchFinished(
-            QString::fromStdString(task.taskID()),
+          packageTask.setResult(
             common::serialize::toQVariantMap(api::types::v1::PackageManager1SearchResult{
               .packages = std::move(pkgs),
               .code = 0,
               .message = "",
-              .type = "",
+              .type = "PackageManager1SearchResult",
             }));
-      });
+          task.updateState(api::types::v1::State::Succeed, "search completed");
+      },
+      CallerContext{ connection(), message() });
     if (!task) {
         return toDBusReply(task);
     }
 
     auto &taskRef = task->get();
     taskRef.updateState(linglong::api::types::v1::State::Queued,
-                        fmt::format("search {}", paras->id));
-    auto result = common::serialize::toQVariantMap(api::types::v1::PackageManager1JobInfo{
-      .id = taskRef.taskID(),
+                        fmt::format("waiting to search {}", searchID));
+    return common::serialize::toQVariantMap(api::types::v1::PackageManager1PackageTaskResult{
+      .taskObjectPath = taskRef.taskObjectPath(),
       .code = 0,
-      .message = "",
-      .type = "",
+      .message = fmt::format("{} is waiting to be searched", searchID),
     });
-    return result;
 }
 
 utils::error::Result<void>
@@ -1863,117 +1849,6 @@ auto PackageManager::InitRunContext(const QString &runContextCfg,
     });
 }
 
-void PackageManager::ReplyInteraction(QDBusObjectPath object_path, const QVariantMap &replies)
-{
-    Q_EMIT this->ReplyReceived(object_path, replies);
-}
-
-void PackageManager::onPeerDisconnected() noexcept
-{
-    LogW("peer caller disconnected");
-    Q_EMIT CallerDisconnected();
-}
-
-bool PackageManager::waitConfirm(
-  PackageTask &taskRef,
-  api::types::v1::InteractionMessageType msgType,
-  const api::types::v1::PackageManager1RequestInteractionAdditionalMessage
-    &additionalMessage) noexcept
-{
-    auto objectPath = QDBusObjectPath(taskRef.taskObjectPath().c_str());
-    QEventLoop loop;
-    QTimer timeoutTimer;
-    timeoutTimer.setSingleShot(true);
-
-    auto callerContext = taskRef.callerContext();
-    std::unique_ptr<QDBusServiceWatcher> watcher;
-
-    QMetaObject::Connection callerDisconnectedConn;
-
-    if (callerContext.isPeerMode()) {
-        callerDisconnectedConn =
-          connect(this, &PackageManager::CallerDisconnected, &loop, [&taskRef, &loop]() {
-              taskRef.updateState(linglong::api::types::v1::State::Canceled, "caller disconnected");
-              loop.exit(1);
-          });
-
-        auto connected = callerContext.connection.connect("",
-                                                          "/org/freedesktop/DBus/Local",
-                                                          "org.freedesktop.DBus.Local",
-                                                          "Disconnected",
-                                                          this,
-                                                          SLOT(onPeerDisconnected()));
-        if (!connected) {
-            LogW("failed to connect to Disconnected signal for peer mode");
-        }
-    } else {
-        auto callerName = callerContext.callerBusName();
-        if (!callerName.isEmpty()) {
-            watcher =
-              std::make_unique<QDBusServiceWatcher>(callerName,
-                                                    callerContext.connection,
-                                                    QDBusServiceWatcher::WatchForUnregistration);
-            connect(watcher.get(),
-                    &QDBusServiceWatcher::serviceUnregistered,
-                    &loop,
-                    [&taskRef, &loop, callerName]() {
-                        LogW("caller {} disconnected", callerName.toStdString());
-                        taskRef.updateState(linglong::api::types::v1::State::Canceled,
-                                            "caller disconnected");
-                        loop.exit(1);
-                    });
-        }
-    }
-
-    auto replyConn =
-      connect(this,
-              &PackageManager::ReplyReceived,
-              &loop,
-              [&taskRef, &loop, objectPath](const QDBusObjectPath &replyObjectPath,
-                                            const QVariantMap &reply) {
-                  if (replyObjectPath.path() != objectPath.path()) {
-                      return;
-                  }
-
-                  auto interactionReply =
-                    common::serialize::fromQVariantMap<api::types::v1::InteractionReply>(reply);
-                  if (!interactionReply || interactionReply->action != "yes") {
-                      taskRef.updateState(linglong::api::types::v1::State::Canceled, "canceled");
-                  }
-                  loop.exit(0);
-              });
-
-    auto timeoutConn = connect(&timeoutTimer, &QTimer::timeout, &loop, [&taskRef, &loop]() {
-        auto msg = fmt::format("task {} confirm timeout", taskRef.taskID());
-        LogW(msg);
-        taskRef.updateState(linglong::api::types::v1::State::Canceled, msg);
-        loop.exit(1);
-    });
-
-    Q_EMIT RequestInteraction(objectPath,
-                              static_cast<int>(msgType),
-                              common::serialize::toQVariantMap(additionalMessage));
-
-    timeoutTimer.start(std::chrono::milliseconds{ 180000 });
-    loop.exec();
-    timeoutTimer.stop();
-
-    disconnect(replyConn);
-    disconnect(timeoutConn);
-    disconnect(callerDisconnectedConn);
-
-    if (callerContext.isPeerMode()) {
-        callerContext.connection.disconnect("",
-                                            "/org/freedesktop/DBus/Local",
-                                            "org.freedesktop.DBus.Local",
-                                            "Disconnected",
-                                            this,
-                                            SLOT(onPeerDisconnected()));
-    }
-
-    return !taskRef.isTaskDone();
-}
-
 // no-op for now
 utils::error::Result<void> PackageManager::tryGenerateCache(const package::Reference &ref) noexcept
 {
@@ -2149,8 +2024,7 @@ QVariantMap PackageManager::runActionOnTaskQueue(std::shared_ptr<Action> action,
     }
 
     auto &taskRef = taskRet->get();
-    Q_EMIT TaskAdded(QDBusObjectPath{ taskRef.taskObjectPath().c_str() });
-    taskRef.updateState(linglong::api::types::v1::State::Queued, action->getTaskName());
+    taskRef.updateState(linglong::api::types::v1::State::Pending, action->getTaskName());
     return common::serialize::toQVariantMap(api::types::v1::PackageManager1PackageTaskResult{
       .taskObjectPath = taskRef.taskObjectPath(),
       .code = 0,

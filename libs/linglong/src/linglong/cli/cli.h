@@ -67,7 +67,7 @@ struct RunOptions
     std::vector<api::types::v1::DeviceOption> deviceOptions;
     std::optional<std::string> instance;
     bool debug{ false };
-    std::string debugListen{ ":2345" };
+    std::string debugListen{ "127.0.0.1:2345" };
     std::optional<std::string> debugDebuginfod;
     std::optional<std::string> debugSymbolDir;
 };
@@ -160,6 +160,7 @@ enum class TaskType : int {
     None,
     Install,
     InstallFromFile,
+    Search,
     Uninstall,
     Upgrade,
 };
@@ -167,11 +168,8 @@ enum class TaskType : int {
 struct PMTaskState
 {
     linglong::api::types::v1::State state{ linglong::api::types::v1::State::Unknown };
-    std::string message;
-    double percentage{ 0 };
-    linglong::utils::error::ErrorCode errorCode;
     TaskType taskType{ TaskType::None };
-    std::variant<api::types::v1::PackageManager1InstallParameters> params;
+    std::variant<api::types::v1::PackageManager1InstallParameters, SearchOptions> params;
 };
 
 bool operator!=(const PMTaskState &lhs, const PMTaskState &rhs);
@@ -255,7 +253,6 @@ private:
     int getLayerDir(const InspectOptions &options);
     int getBundleDir(const InspectOptions &options);
     void detectDrivers();
-    utils::error::Result<void> syncTaskProperties();
     int runResolvedContext(runtime::RunContext &runContext,
                            const RunOptions &options,
                            std::optional<api::types::v1::RuntimeConfigure> runtimeConfig);
@@ -283,25 +280,19 @@ private:
                                                TaskType type);
     void waitTaskDone();
 
-    void handleTaskState(api::types::v1::State previousState) noexcept;
     void handleInstallError(const utils::error::Error &error,
                             const api::types::v1::PackageManager1InstallParameters &params);
     void handleInstallFromFileError(const utils::error::Error &error);
     void handleUninstallError(const utils::error::Error &error);
     void handleUpgradeError(const utils::error::Error &error);
     bool handleCommonError(const utils::error::Error &error);
-    void printOnTaskFailed();
-    void printOnTaskSuccess();
+    void printOnTaskFailed(const QVariantMap &result);
+    void printOnTaskSuccess(const QVariantMap &result);
 
 private Q_SLOTS:
-    // maybe use in the future
-    void onTaskAdded(const QDBusObjectPath &object_path);
-    void
-    onTaskRemoved(const QDBusObjectPath &object_path, int state, int code, const QString &message);
-    void onTaskPropertiesChanged(const QString &interface,
-                                 const QVariantMap &changed_properties,
-                                 const QStringList &invalidated_properties);
-    void interaction(const QDBusObjectPath &object_path,
+    void onTaskEvent(const QString &event, const QVariantMap &data);
+    void onTaskFinished(const QVariantMap &result);
+    void interaction(const QString &interactionId,
                      int messageID,
                      const QVariantMap &additionalMessage);
 
@@ -317,8 +308,9 @@ private:
     bool peerMode{ false };
     std::unique_ptr<api::dbus::v1::PackageManager> pkgMan;
     QString taskObjectPath;
-    api::dbus::v1::Task1 *task{ nullptr };
+    std::unique_ptr<api::dbus::v1::Task1> task;
     PMTaskState taskState;
+    bool taskFinished{ false };
     GlobalOptions globalOptions;
 };
 

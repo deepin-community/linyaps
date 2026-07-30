@@ -74,7 +74,7 @@ utils::error::Result<void> RefInstallationAction::doAction(PackageTask &task)
     mainTask = &task;
 
     DataMonitor monitor(5, 1, [this](DataMonitor &m) {
-        mainTask->updateMessage(
+        mainTask->updateStateMessage(
           fmt::format("{} {:>9}", taskMessage, fmt::format("[{}]", m.getHumanSpeed())));
     });
 
@@ -174,9 +174,9 @@ utils::error::Result<void> RefInstallationAction::preInstall(Task &task)
             .localRef = operation->oldRef->toString(),
             .remoteRef = operation->newRef->reference.toString()
         };
-        if (!pm.waitConfirm(*mainTask,
-                            api::types::v1::InteractionMessageType::Upgrade,
-                            additionalMessage)) {
+        if (!mainTask->requestInteraction(api::types::v1::InteractionMessageType::Upgrade,
+                                          additionalMessage)) {
+            mainTask->Cancel();
             return LINGLONG_ERR("action canceled");
         }
     }
@@ -348,7 +348,7 @@ utils::error::Result<void> RefInstallationAction::install(Task &task)
         const auto &[refRepo, module, meta] = ref;
 
         taskMessage = fmt::format("Installing {}/{}", refRepo.reference.toString(), module);
-        task.updateMessage(taskMessage);
+        task.updateStateMessage(taskMessage);
 
         auto res = pm.installRefModule(task, refRepo, module);
         if (!res) {

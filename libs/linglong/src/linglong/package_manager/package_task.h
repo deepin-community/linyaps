@@ -4,8 +4,9 @@
 
 #pragma once
 
+#include "linglong/api/types/v1/InteractionMessageType.hpp"
+#include "linglong/api/types/v1/PackageManager1RequestInteractionAdditionalMessage.hpp"
 #include "linglong/api/types/v1/State.hpp"
-#include "linglong/common/dbus/properties_forwarder.h"
 #include "linglong/package_manager/task.h"
 #include "linglong/utils/error/error.h"
 #include "linglong/utils/log/log.h"
@@ -14,14 +15,19 @@
 #include <QDBusContext>
 #include <QDBusMessage>
 #include <QDBusObjectPath>
+#include <QDBusServiceWatcher>
 #include <QEvent>
 #include <QMap>
 #include <QObject>
 #include <QString>
 #include <QUuid>
+#include <QVariantMap>
 
+#include <atomic>
+#include <condition_variable>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <thread>
 
@@ -45,11 +51,6 @@ class PackageTask : public QObject, protected QDBusContext, public Task, public 
 {
     Q_OBJECT
 public:
-    Q_PROPERTY(int State READ getPropertyState NOTIFY StateChanged)
-    Q_PROPERTY(QString Message READ getPropertyMessage NOTIFY MessageChanged)
-    Q_PROPERTY(int Code READ getPropertyCode NOTIFY CodeChanged)
-    Q_PROPERTY(double Percentage READ percentage NOTIFY PercentageChanged)
-
     explicit PackageTask(std::function<void(Task &)> job, QObject *parent = nullptr);
     PackageTask(PackageTask &&other) = delete;
     PackageTask &operator=(PackageTask &&other) = delete;
@@ -57,9 +58,10 @@ public:
 
     void onProgress() noexcept override;
     void onStateChanged() noexcept override;
+    void onStateMessageChanged() noexcept override;
 
-    // message report when progress or state changed
-    void onMessage() noexcept override;
+    // report a standalone text output event
+    void onMessage(const std::string &message) noexcept override;
 
     void onDataArrived(uint arrived) noexcept override { Q_EMIT DataArrived(arrived); }
 
@@ -67,15 +69,6 @@ public:
     {
         Q_EMIT PartChanged(handled, total);
     }
-
-    [[nodiscard]] int getPropertyState() const noexcept { return static_cast<int>(state()); }
-
-    [[nodiscard]] QString getPropertyMessage() const noexcept
-    {
-        return QString::fromStdString(Task::message());
-    }
-
-    [[nodiscard]] int getPropertyCode() const noexcept { return static_cast<int>(code()); }
 
     [[nodiscard]] std::string taskObjectPath() const noexcept
     {
@@ -88,26 +81,50 @@ public:
 
     void setCallerContext(const CallerContext &ctx);
 
-    [[nodiscard]] const CallerContext &callerContext() const noexcept { return m_callerContext; }
+    bool requestInteraction(api::types::v1::InteractionMessageType msgType,
+                            const api::types::v1::PackageManager1RequestInteractionAdditionalMessage
+                              &additionalMessage) noexcept;
+
+    // The result must contain a "type" field identifying its concrete API type.
+    void setResult(QVariantMap result) noexcept { m_result = std::move(result); }
 
 public Q_SLOTS:
+    void Start() noexcept;
     void Cancel() noexcept;
+    void ReplyInteraction(const QString &interactionId, const QVariantMap &replies) noexcept;
 
 Q_SIGNALS:
-    void StateChanged(int newState);
-    void PercentageChanged(double newPercentage);
-    void MessageChanged(QString newMessage);
+    void TaskEvent(QString event, QVariantMap data);
+    void TaskFinished(QVariantMap result);
     void DataArrived(uint arrived);
     void PartChanged(uint fetched, uint request);
-    void CodeChanged(int newCode);
+    void RequestInteraction(QString interactionId, int messageID, QVariantMap additionalMessage);
+    void startRequested();
+    void terminalStateReached();
 
-    void changePropertiesDone();
+private Q_SLOTS:
+    void onCallerDisconnected() noexcept;
 
 private:
     friend class PackageTaskQueue;
+
+    void emitStateEvent(const StateSnapshot &snapshot) noexcept;
+    void finish() noexcept;
+    void completeInteraction(bool accepted) noexcept;
+    [[nodiscard]] bool authorizeCaller() noexcept;
+
     GCancellable *m_cancelFlag{ nullptr };
-    common::dbus::PropertiesForwarder *m_forwarder{ nullptr };
     CallerContext m_callerContext;
+    std::unique_ptr<QDBusServiceWatcher> m_callerWatcher;
+    std::atomic_bool m_finishedEmitted{ false };
+    std::atomic_bool m_callerDisconnected{ false };
+    std::mutex m_interactionMutex;
+    std::condition_variable m_interactionChanged;
+    QString m_interactionId;
+    std::optional<bool> m_interactionResult;
+    bool m_interactionActive{ false };
+    bool m_exposed{ false };
+    std::optional<QVariantMap> m_result;
 };
 
 // PackageTaskQueue is used to manage tasks and run them in a separated thread
@@ -129,15 +146,14 @@ public:
 
     utils::error::Result<std::reference_wrapper<Task>> getTask(const std::string &taskID) noexcept;
 
-Q_SIGNALS:
-    void taskDone(const QString &taskID);
-
 private:
     Task &enqueueTask(std::unique_ptr<Task> task);
+    void finishTask(Task &task) noexcept;
     void tryRunTask();
 
     std::list<std::unique_ptr<Task>> m_taskQueue;
     std::thread m_taskThread;
+    Task *m_runningTask{ nullptr };
 };
 
 template <typename Func>
@@ -147,16 +163,29 @@ PackageTaskQueue::addPackageTask(Func &&job, std::optional<CallerContext> ctx) n
     LINGLONG_TRACE("add package task");
     static_assert(std::is_invocable_r_v<void, Func, Task &>, "mismatch function signature");
 
-    PackageTask &task = dynamic_cast<PackageTask &>(
-      enqueueTask(std::make_unique<PackageTask>(std::forward<Func>(job), this)));
+    auto ownedTask = std::make_unique<PackageTask>(std::forward<Func>(job), this);
+    PackageTask &task = *ownedTask;
 
     if (ctx) {
+        task.setState(api::types::v1::State::Pending);
         task.setCallerContext(*ctx);
         auto ret = task.exposeOnDBus();
         if (!ret) {
             return LINGLONG_ERR(ret);
         }
     }
+
+    enqueueTask(std::move(ownedTask));
+    QObject::connect(&task,
+                     &PackageTask::startRequested,
+                     this,
+                     &PackageTaskQueue::tryRunTask,
+                     Qt::QueuedConnection);
+    QObject::connect(&task,
+                     &PackageTask::terminalStateReached,
+                     this,
+                     &PackageTaskQueue::tryRunTask,
+                     Qt::QueuedConnection);
 
     return task;
 }
