@@ -318,6 +318,7 @@ function(gen_library_target name)
       message(STATUS "system fmt not found, using external fmt")
       add_library(fmt-lib INTERFACE)
       add_library(${output} ALIAS fmt-lib)
+      add_library(fmt::fmt-header-only ALIAS fmt-lib)
       target_include_directories(fmt-lib INTERFACE external/fmt/include)
       target_compile_definitions(fmt-lib INTERFACE FMT_HEADER_ONLY)
     else()
@@ -479,12 +480,10 @@ pfl_add_libraries(
   cdi
   APPS
   ll-init
-  ll-dialog
   ll-builder
   ll-cli
   ll-package-manager
   llpkg
-  ll-session-helper
   ll-driver-detect)
 
 if(ENABLE_LINGLONG_APP_BUILDER_UTILS)

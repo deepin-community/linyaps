@@ -510,7 +510,7 @@ j["version"] = x.version;
 }
 
 inline void from_json(const json & j, BuilderProject& x) {
-x.base = j.at("base").get<std::string>();
+x.base = get_stack_optional<std::string>(j, "base");
 x.build = j.at("build").get<std::string>();
 x.buildext = get_stack_optional<BuilderProjectBuildEXT>(j, "buildext");
 x.command = get_stack_optional<std::vector<std::string>>(j, "command");
@@ -527,7 +527,9 @@ x.version = j.at("version").get<std::string>();
 
 inline void to_json(json & j, const BuilderProject & x) {
 j = json::object();
+if (x.base) {
 j["base"] = x.base;
+}
 j["build"] = x.build;
 if (x.buildext) {
 j["buildext"] = x.buildext;
@@ -599,12 +601,16 @@ j["pid"] = x.pid;
 
 inline void from_json(const json & j, CommonOptions& x) {
 x.force = j.at("force").get<bool>();
+x.noAutoPrune = get_stack_optional<bool>(j, "noAutoPrune");
 x.skipInteraction = j.at("skipInteraction").get<bool>();
 }
 
 inline void to_json(json & j, const CommonOptions & x) {
 j = json::object();
 j["force"] = x.force;
+if (x.noAutoPrune) {
+j["noAutoPrune"] = x.noAutoPrune;
+}
 j["skipInteraction"] = x.skipInteraction;
 }
 
@@ -1152,15 +1158,17 @@ j["package"] = x.package;
 }
 
 inline void from_json(const json & j, PackageManager1UpdateParameters& x) {
-x.appOnly = j.at("appOnly").get<bool>();
 x.depsOnly = j.at("depsOnly").get<bool>();
+x.noAutoPrune = get_stack_optional<bool>(j, "noAutoPrune");
 x.packages = j.at("packages").get<std::vector<PackageManager1Package>>();
 }
 
 inline void to_json(json & j, const PackageManager1UpdateParameters & x) {
 j = json::object();
-j["appOnly"] = x.appOnly;
 j["depsOnly"] = x.depsOnly;
+if (x.noAutoPrune) {
+j["noAutoPrune"] = x.noAutoPrune;
+}
 j["packages"] = x.packages;
 }
 
@@ -1276,6 +1284,7 @@ x.extensions = get_stack_optional<std::map<std::string, std::vector<std::string>
 x.instance = get_stack_optional<std::string>(j, "instance");
 x.mounts = get_stack_optional<std::vector<Mount>>(j, "mounts");
 x.overlayfs = get_stack_optional<std::string>(j, "overlayfs");
+x.resolvConf = get_stack_optional<std::string>(j, "resolvConf");
 x.runtime = get_stack_optional<std::string>(j, "runtime");
 x.timezone = get_stack_optional<std::string>(j, "timezone");
 x.version = j.at("version").get<std::string>();
@@ -1303,6 +1312,9 @@ j["mounts"] = x.mounts;
 }
 if (x.overlayfs) {
 j["overlayfs"] = x.overlayfs;
+}
+if (x.resolvConf) {
+j["resolvConf"] = x.resolvConf;
 }
 if (x.runtime) {
 j["runtime"] = x.runtime;

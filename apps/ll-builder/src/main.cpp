@@ -34,6 +34,7 @@
 #include <optional>
 #include <ostream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <wordexp.h>
@@ -77,25 +78,39 @@ parseProjectConfig(const std::filesystem::path &filename)
           "'command' field is missing, app should have command as the default startup command");
     }
 
-    // 校验bese和runtime版本是否合法
-    auto baseFuzzyRef = linglong::package::FuzzyReference::parse(project->base.c_str());
-    if (!baseFuzzyRef) {
-        return LINGLONG_ERR("failed to parse base field", baseFuzzyRef);
+    if (!project->base && !project->runtime) {
+        return LINGLONG_ERR("at least one of 'base' or 'runtime' must be specified");
     }
-    auto ret = linglong::package::Version::validateDependVersion(baseFuzzyRef->version.value());
-    if (!ret) {
-        return LINGLONG_ERR("base version is not valid", ret);
-    }
-    if (project->runtime) {
-        auto runtimeFuzzyRef =
-          linglong::package::FuzzyReference::parse(project->runtime.value().c_str());
-        if (!runtimeFuzzyRef) {
-            return LINGLONG_ERR("failed to parse runtime field", runtimeFuzzyRef);
+
+    // 校验 base 和 runtime 版本是否合法
+    auto validateDependency = [&](const std::optional<std::string> &dependency,
+                                  std::string_view field) -> linglong::utils::error::Result<void> {
+        if (!dependency) {
+            return LINGLONG_OK;
         }
-        ret = linglong::package::Version::validateDependVersion(runtimeFuzzyRef->version.value());
+
+        auto fuzzyRef = linglong::package::FuzzyReference::parse(*dependency);
+        if (!fuzzyRef) {
+            return LINGLONG_ERR(fmt::format("failed to parse {} field", field), fuzzyRef);
+        }
+        if (!fuzzyRef->version) {
+            return LINGLONG_ERR(fmt::format("{} version is missing", field));
+        }
+
+        auto ret = linglong::package::Version::validateDependVersion(*fuzzyRef->version);
         if (!ret) {
-            return LINGLONG_ERR("runtime version is not valid", ret);
+            return LINGLONG_ERR(fmt::format("{} version is not valid", field), ret);
         }
+        return LINGLONG_OK;
+    };
+
+    auto ret = validateDependency(project->base, "base");
+    if (!ret) {
+        return LINGLONG_ERR(ret);
+    }
+    ret = validateDependency(project->runtime, "runtime");
+    if (!ret) {
+        return LINGLONG_ERR(ret);
     }
     return project;
 }
@@ -379,6 +394,18 @@ int handleExtract(const ExtractCommandOptions &options)
     return 0;
 }
 
+int handleClean(linglong::builder::Builder &builder, const CleanCommandOptions &options)
+{
+    auto result = builder.cleanBuildArtifacts();
+    if (!result) {
+        LogE("Clean failed: {}", result.error());
+        return result.error().code();
+    }
+
+    LogI("Clean completed successfully.");
+    return 0;
+}
+
 std::vector<std::string> getProjectModule(const linglong::api::types::v1::BuilderProject &project)
 {
     std::list<std::string> modules = { "binary", "develop" }; // Start with base modules
@@ -467,6 +494,7 @@ You can report bugs to the linyaps team under this project: https://github.com/O
     ImportCommandOptions importOpts;
     ImportDirCommandOptions importDirOpts;
     ExtractCommandOptions extractOpts;
+    CleanCommandOptions cleanOpts;
     RepoSubcommandOptions repoCmdOpts;
 
     // add builder flags
@@ -656,6 +684,12 @@ You can report bugs to the linyaps team under this project: https://github.com/O
     buildExtract->add_option("DIR", extractOpts.dir, _("Destination directory"))
       ->type_name("DIR")
       ->required();
+    // add builder clean
+    auto buildClean = commandParser.add_subcommand("clean", _("Clean build artifacts"));
+    buildClean->usage(_("Usage: ll-builder clean"));
+    buildClean->add_option("-f, --file", filePath, _("File path of the linglong.yaml"))
+      ->type_name("FILE")
+      ->check(CLI::ExistingFile);
 
     auto *buildRepo = linglong::common::cli::addRepoCommand(commandParser,
                                                             repoCmdOpts.repoOptions,
@@ -852,6 +886,10 @@ You can report bugs to the linyaps team under this project: https://github.com/O
             pushOpts.pushModules = getProjectModule(*project);
         }
         return handlePush(builder, pushOpts);
+    }
+
+    if (buildClean->parsed()) {
+        return handleClean(builder, cleanOpts);
     }
 
     if (!canonicalYamlPath) {

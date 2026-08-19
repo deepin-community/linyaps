@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2025 UnionTech Software Technology Co., Ltd.
+// SPDX-FileCopyrightText: 2025 - 2026 UnionTech Software Technology Co., Ltd.
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
@@ -27,8 +27,8 @@ public:
 
     static std::shared_ptr<PackageUpdateAction>
     create(std::vector<api::types::v1::PackageManager1Package> toUpgrade,
-           bool appOnly,
            bool depsOnly,
+           bool noAutoPrune,
            PackageManager &pm,
            repo::OSTreeRepo &repo);
 
@@ -45,13 +45,14 @@ protected:
 
 private:
     PackageUpdateAction(std::vector<api::types::v1::PackageManager1Package> toUpgrade,
-                        bool appOnly,
                         bool depsOnly,
+                        bool noAutoPrune,
                         PackageManager &pm,
                         repo::OSTreeRepo &repo);
 
-    utils::error::Result<void>
-    updateApp(Task &task, const api::types::v1::PackageInfoV2 &app, bool appOnly, bool depsOnly);
+    utils::error::Result<void> updateApp(Task &task,
+                                         const api::types::v1::PackageInfoV2 &app,
+                                         bool depsOnly);
     utils::error::Result<void> postUpdateApp(Task &task,
                                              const package::Reference &localRef,
                                              const package::ReferenceWithRepo &remoteRef);
@@ -70,8 +71,8 @@ private:
                                                       const api::types::v1::PackageInfoV2 &info);
 
     std::vector<api::types::v1::PackageManager1Package> toUpgrade;
-    bool appOnly;
     bool depsOnly;
+    bool noAutoPrune;
 
     std::string taskName;
     std::string taskMessage;
@@ -81,6 +82,7 @@ private:
     uint64_t taskTotalSize;
     uint64_t taskNeededSize;
     uint64_t taskFetchedSize;
+    bool repositoryChanged = false;
 };
 
 } // namespace linglong::service

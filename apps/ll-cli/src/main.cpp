@@ -62,42 +62,6 @@ std::vector<std::string> transformOldExec(int argc, char **argv) noexcept
     return res;
 }
 
-int lockCheck() noexcept
-{
-    std::error_code ec;
-    constexpr auto lock = "/run/linglong/lock";
-    auto fd = ::open(lock, O_RDONLY);
-    if (fd == -1) {
-        if (errno == ENOENT) {
-            return 0;
-        }
-
-        LogE("failed to open lock {}: {}", lock, linglong::common::error::errorString(errno));
-        return -1;
-    }
-
-    auto closeFd = linglong::utils::finally::finally([fd]() {
-        ::close(fd);
-    });
-
-    struct flock lock_info{ .l_type = F_RDLCK,
-                            .l_whence = SEEK_SET,
-                            .l_start = 0,
-                            .l_len = 0,
-                            .l_pid = 0 };
-
-    if (::fcntl(fd, F_GETLK, &lock_info) == -1) {
-        LogE("failed to get lock {}", lock);
-        return -1;
-    }
-
-    if (lock_info.l_type == F_UNLCK) {
-        return 0;
-    }
-
-    return lock_info.l_pid;
-}
-
 // Validator for string inputs
 CLI::Validator validatorString{
     [](const std::string &parameter) {
@@ -309,9 +273,9 @@ Example:
 # install application by appid
 ll-cli install org.deepin.demo
 # install application by linyaps layer
-ll-cli install demo_0.0.0.1_x86_64_binary.layer
+ll-cli install ./demo_0.0.0.1_x86_64_binary.layer
 # install application by linyaps uab
-ll-cli install demo_x86_64_0.0.0.1_main.uab
+ll-cli install ./demo_x86_64_0.0.0.1_main.uab
 # install specified module of the appid
 ll-cli install org.deepin.demo --module=binary
 # install specified version of the appid
@@ -335,6 +299,9 @@ ll-cli install stable:org.deepin.demo/0.0.0.1/x86_64
     cliInstall->add_flag("-y",
                          installOptions.confirmOpt,
                          _("Automatically answer yes to all questions"));
+    cliInstall->add_flag("--no-auto-prune",
+                         installOptions.noAutoPrune,
+                         _("Do not automatically remove unused dependencies"));
 }
 
 // Function to add the uninstall subcommand
@@ -356,6 +323,9 @@ void addUninstallCommand(CLI::App &commandParser,
     cliUninstall->add_flag("--force",
                            uninstallOptions.forceOpt,
                            _("Force uninstall base or runtime"));
+    cliUninstall->add_flag("--no-auto-prune",
+                           uninstallOptions.noAutoPrune,
+                           _("Do not automatically remove unused dependencies"));
 
     // below options are used for compatibility with old ll-cli
     const auto &pruneDescription = std::string{ _("Remove all unused modules") };
@@ -382,11 +352,12 @@ void addUpgradeCommand(CLI::App &commandParser,
                    _("Specify the application ID. If it not be specified, all "
                      "applications will be upgraded"))
       ->check(validatorString);
-    auto depsOnly = cliUpgrade->add_flag("--deps-only",
-                                         upgradeOptions.depsOnly,
-                                         _("Only upgrade dependencies of application"));
-    cliUpgrade->add_flag("--app-only", upgradeOptions.appOnly, _("Only upgrade application"))
-      ->excludes(depsOnly);
+    cliUpgrade->add_flag("--deps-only",
+                         upgradeOptions.depsOnly,
+                         _("Only upgrade dependencies of application"));
+    cliUpgrade->add_flag("--no-auto-prune",
+                         upgradeOptions.noAutoPrune,
+                         _("Do not automatically remove unused dependencies"));
 }
 
 // Function to add the search subcommand
@@ -635,10 +606,10 @@ You can report bugs to the linyaps team under this project: https://github.com/O
     auto *jsonFlag = commandParser.add_flag("--json", jsonDescription);
 
     // verbose flag
-    GlobalOptions globalOptions{ .verbose = false, .noProgress = false };
+    GlobalOptions globalOptions{ .verbose = 0, .noProgress = false };
     commandParser.add_flag("-v,--verbose",
                            globalOptions.verbose,
-                           _("Show debug info (verbose logs)"));
+                           _("Show debug info; repeat to enable backtrace"));
     commandParser.add_flag("--no-progress",
                            globalOptions.noProgress,
                            _("Don't output progress information"));
@@ -703,26 +674,8 @@ You can report bugs to the linyaps team under this project: https://github.com/O
     if (globalOptions.verbose) {
         linglong::utils::log::setLogLevel(linglong::utils::log::LogLevel::Debug);
     }
-
-    // check lock
-    while (true) {
-        auto lockOwner = lockCheck();
-        if (lockOwner == -1) {
-            LogE("lock check failed");
-            return -1;
-        }
-
-        if (lockOwner > 0) {
-            std::cerr << "\r\33[K"
-                      << "\033[?25l"
-                      << "repository is being operated by another process, waiting for" << lockOwner
-                      << "\033[?25h" << std::endl;
-            using namespace std::chrono_literals;
-            std::this_thread::sleep_for(1s);
-            continue;
-        }
-
-        break;
+    if (globalOptions.verbose > 1) {
+        ::setenv("LINYAPS_BACKTRACE", "1", 1);
     }
 
     // create printer

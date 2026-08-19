@@ -294,8 +294,7 @@
       "required": [
         "version",
         "package",
-        "build",
-        "base"
+        "build"
       ],
       "properties": {
         "version": {
@@ -890,6 +889,10 @@
         "force": {
           "description": "force to overwrite",
           "type": "boolean"
+        },
+        "noAutoPrune": {
+          "description": "do not automatically remove unused dependencies",
+          "type": "boolean"
         }
       }
     },
@@ -1056,8 +1059,7 @@
       "description": "package manager update result",
       "required": [
         "packages",
-        "depsOnly",
-        "appOnly"
+        "depsOnly"
       ],
       "properties": {
         "packages": {
@@ -1071,9 +1073,9 @@
           "type": "boolean",
           "description": "upgrade dependencies only"
         },
-        "appOnly": {
+        "noAutoPrune": {
           "type": "boolean",
-          "description": "upgrade applications only"
+          "description": "do not automatically remove unused dependencies"
         }
       }
     },
@@ -1535,6 +1537,9 @@
           }
         },
         "overlayfs": {
+          "type": "string"
+        },
+        "resolvConf": {
           "type": "string"
         },
         "timezone": {

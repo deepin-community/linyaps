@@ -7,6 +7,7 @@ Before building Linglong, ensure the following dependencies are installed:
 - cmake
 - debhelper-compat (= 12)
 - intltool
+- libcap-dev
 - libcli11-dev (>= 2.4.1) | hello
 - libcurl4-openssl-dev
 - libdeflate-dev
@@ -30,7 +31,12 @@ Before building Linglong, ensure the following dependencies are installed:
 - qt6-base-dev | qtbase5-dev
 - qt6-base-private-dev | qtbase5-private-dev
 - systemd
+- uuid-dev
 - zlib1g-dev
+
+For running the unit tests (`ll-tests`) you also need:
+
+- `erofs-utils` (provides `mkfs.erofs`, used by the `LayerPackagerTest` and `UabFileTest` suite setup)
 
 Linglong uses [cmake presets]. To build and install:
 
@@ -72,6 +78,49 @@ export CPM_USE_LOCAL_PACKAGES=1
 See [CPM.cmake] README for more information.
 
 [CPM.cmake]: https://github.com/cpm-cmake/CPM.cmake
+
+## Code Style & Pre-commit
+
+Linglong uses [clang-format] for C/C++ code style; the rules live in
+[`.clang-format`](.clang-format). Before committing C/C++ changes, run clang-format
+on the files you touched:
+
+```bash
+clang-format -i --sort-includes --style=file path/to/file.cpp
+```
+
+Note that `--sort-includes` reorders `#include` lines alphabetically -- if you add
+includes by hand in the wrong order, the CI check will flag it. Just run clang-format
+first and commit the formatted result.
+
+The repository also uses [pre-commit] for a set of repo-wide checks (trailing
+whitespace, EOF newline, YAML/JSON/XML validation, and `shfmt` for shell scripts),
+which are enforced automatically on pull requests via [pre-commit.ci]. To run the
+same checks locally, install and register the hooks once:
+
+```bash
+pip install pre-commit          # or: apt install pre-commit
+pre-commit install              # registers the git hooks in .git/hooks/
+```
+
+After that, `git commit` runs the configured hooks. If a hook reformats a file,
+the commit is blocked -- just `git add` the reformatted file and commit again. To
+run them once without installing:
+
+```bash
+pre-commit run --all-files
+pre-commit run clang-format --files path/to/file
+```
+
+When a [pre-commit.ci] check fails on a PR, comment `pre-commit.ci autofix` on the
+PR (or apply the label) to let the bot fix and push the formatting, or fix locally
+and push. The `shfmt` check (shell formatting) is only enforced by CI -- you do not
+need to install it locally; just follow the existing style in shell files or let
+pre-commit.ci fix them.
+
+[clang-format]: https://clang.llvm.org/docs/ClangFormat.html
+[pre-commit]: https://pre-commit.com/
+[pre-commit.ci]: https://pre-commit.ci/
 
 ## Internationalization (i18n) Management
 

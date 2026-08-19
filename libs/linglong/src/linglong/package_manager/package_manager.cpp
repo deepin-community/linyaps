@@ -63,8 +63,6 @@ namespace linglong::service {
 
 namespace {
 
-constexpr auto repoLockPath = "/run/linglong/lock";
-
 template <typename T>
 QVariantMap toDBusReply(const utils::error::Result<T> &x, std::string type = "display") noexcept
 {
@@ -269,18 +267,19 @@ PackageManager::getAllRunningContainers() noexcept
 [[nodiscard]] utils::error::Result<void> PackageManager::lockRepo() noexcept
 {
     LINGLONG_TRACE("lock whole repo")
-    lockFd = ::open(repoLockPath, O_RDWR | O_CREAT, 0644);
+    lockFd = ::open(common::dir::repoLockPath, O_WRONLY);
     if (lockFd == -1) {
         return LINGLONG_ERR(fmt::format("failed to create lock file {}: {}",
-                                        repoLockPath,
+                                        common::dir::repoLockPath,
                                         common::error::errorString(errno)));
     }
 
     struct flock locker{ .l_type = F_WRLCK, .l_whence = SEEK_SET, .l_start = 0, .l_len = 0 };
 
     if (::fcntl(lockFd, F_SETLK, &locker) == -1) {
-        return LINGLONG_ERR(
-          fmt::format("failed to lock {}: {}", repoLockPath, common::error::errorString(errno)));
+        return LINGLONG_ERR(fmt::format("failed to lock {}: {}",
+                                        common::dir::repoLockPath,
+                                        common::error::errorString(errno)));
     }
 
     return LINGLONG_OK;
@@ -297,8 +296,9 @@ PackageManager::getAllRunningContainers() noexcept
     struct flock unlocker{ .l_type = F_UNLCK, .l_whence = SEEK_SET, .l_start = 0, .l_len = 0 };
 
     if (::fcntl(lockFd, F_SETLK, &unlocker)) {
-        return LINGLONG_ERR(
-          fmt::format("failed to unlock {}: {}", repoLockPath, common::error::errorString(errno)));
+        return LINGLONG_ERR(fmt::format("failed to unlock {}: {}",
+                                        common::dir::repoLockPath,
+                                        common::error::errorString(errno)));
     }
 
     ::close(lockFd);
@@ -429,6 +429,7 @@ void PackageManager::deferredUninstall() noexcept
         return;
     }
 
+    bool refsRemoved = false;
     for (const auto &[ref, items] : uninstalledLayers) {
         for (const auto &item : items) {
             // The app was already unapplied before being marked for lazy deletion.
@@ -442,6 +443,7 @@ void PackageManager::deferredUninstall() noexcept
                 LogE("failed to remove lazy deleted layer {}", ret.error());
                 continue;
             }
+            refsRemoved = true;
         }
     }
 
@@ -449,6 +451,20 @@ void PackageManager::deferredUninstall() noexcept
     if (!mergeRet) {
         LogE("failed to merge modules: {}", mergeRet.error());
     }
+
+    if (!refsRemoved) {
+        return;
+    }
+
+    // Deferred removal only releases the deleted layers and unreachable OSTree objects.
+    // Dependency-aware pruning is intentionally left to an explicit prune or a later package
+    // operation, because the originating auto-prune option is not retained for deferred work.
+    auto pruneRet = this->repo->prune();
+    if (pruneRet) {
+        return;
+    }
+
+    LogE("failed to prune after lazy uninstall: {}", pruneRet.error());
 }
 
 auto PackageManager::getConfiguration() const noexcept -> QVariantMap
@@ -549,7 +565,6 @@ QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd,
     Q_ASSERT(*layerFileRet != nullptr);
 
     const auto &layerFile = *layerFileRet;
-    auto realFile = layerFile->symLinkTarget();
     auto metaInfoRet = layerFile->metaInfo();
     if (!metaInfoRet) {
         return toDBusReply(metaInfoRet);
@@ -695,6 +710,7 @@ QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd,
                   return;
               }
 
+              bool appReplaced = false;
               auto ret = executePostInstallHooks(*newRef);
               if (!ret) {
                   taskRef.reportError(std::move(ret).error());
@@ -716,7 +732,19 @@ QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd,
                                localRef->toString(),
                                packageRef.toString(),
                                ret.error().message());
+                      } else {
+                          appReplaced = true;
                       }
+                  }
+              }
+
+              if (appReplaced) {
+                  auto pruneRet =
+                    options.noAutoPrune.value_or(false) ? this->repo->prune() : pruneUnused();
+                  if (!pruneRet) {
+                      LogE("failed to prune after installing {}: {}",
+                           newRef->toString(),
+                           pruneRet.error());
                   }
               }
           }
@@ -735,8 +763,7 @@ QVariantMap PackageManager::installFromLayer(const QDBusUnixFileDescriptor &fd,
     return common::serialize::toQVariantMap(api::types::v1::PackageManager1PackageTaskResult{
       .taskObjectPath = taskRef.taskObjectPath(),
       .code = 0,
-      .message = (realFile + " is now installing").toStdString(),
-    });
+      .message = "layer file is now installing" });
 }
 
 QVariantMap PackageManager::installFromUAB(const QDBusUnixFileDescriptor &fd,
@@ -1026,12 +1053,16 @@ QVariantMap PackageManager::uninstallImpl(const QVariantMap &parameters,
                                curModule);
 
     auto taskRet = tasks.addPackageTask(
-      [this, mainRef = *mainRef, curModule](Task &taskRef) {
+      [this,
+       mainRef = *mainRef,
+       curModule,
+       noAutoPrune = paras->options.noAutoPrune.value_or(false)](Task &taskRef) {
           if (taskRef.isTaskDone()) {
               return;
           }
 
-          auto res = this->Uninstall(dynamic_cast<PackageTask &>(taskRef), mainRef, curModule);
+          auto res =
+            this->Uninstall(dynamic_cast<PackageTask &>(taskRef), mainRef, curModule, noAutoPrune);
           if (!res) {
               LogE("uninstall failed: {}", res.error());
               taskRef.reportError(std::move(res.error()));
@@ -1053,7 +1084,8 @@ QVariantMap PackageManager::uninstallImpl(const QVariantMap &parameters,
 
 utils::error::Result<void> PackageManager::Uninstall(PackageTask &taskContext,
                                                      const package::Reference &ref,
-                                                     const std::string &module) noexcept
+                                                     const std::string &module,
+                                                     bool noAutoPrune) noexcept
 {
     LINGLONG_TRACE(fmt::format("uninstall ref {} {}", ref.toString(), module));
 
@@ -1061,6 +1093,7 @@ utils::error::Result<void> PackageManager::Uninstall(PackageTask &taskContext,
                             fmt::format("Uninstalling {}", ref.toString()));
 
     std::vector<std::string> removedModules{ module };
+    bool mayHaveUnusedDependencies = false;
 
     if (module == "binary" || module == "runtime") {
         // remove main module means remove all modules
@@ -1076,6 +1109,7 @@ utils::error::Result<void> PackageManager::Uninstall(PackageTask &taskContext,
             if (!res) {
                 return LINGLONG_ERR(res);
             }
+            mayHaveUnusedDependencies = true;
         }
     }
 
@@ -1089,9 +1123,9 @@ utils::error::Result<void> PackageManager::Uninstall(PackageTask &taskContext,
         LogE("merge modules failed: {}", mergeRet.error());
     }
 
-    auto pruneRet = this->repo->prune();
+    auto pruneRet = mayHaveUnusedDependencies && !noAutoPrune ? pruneUnused() : this->repo->prune();
     if (!pruneRet) {
-        return LINGLONG_ERR(pruneRet);
+        LogE("failed to prune after uninstalling {}: {}", ref.toString(), pruneRet.error());
     }
 
     taskContext.updateState(linglong::api::types::v1::State::Succeed,
@@ -1143,8 +1177,11 @@ QVariantMap PackageManager::updateImpl(const QVariantMap &parameters,
         return toDBusReply(utils::error::ErrorCode::AppUpgradeFailed, paras.error().message());
     }
 
-    auto action =
-      PackageUpdateAction::create(paras->packages, paras->appOnly, paras->depsOnly, *this, *repo);
+    auto action = PackageUpdateAction::create(paras->packages,
+                                              paras->depsOnly,
+                                              paras->noAutoPrune.value_or(false),
+                                              *this,
+                                              *repo);
     if (!action) {
         return toDBusReply(utils::error::ErrorCode::AppUpgradeFailed,
                            "failed to create update action");
@@ -1771,6 +1808,12 @@ PackageManager::Prune(std::vector<api::types::v1::PackageInfoV2> &removed) noexc
         return LINGLONG_ERR(pruneRet);
     }
     return LINGLONG_OK;
+}
+
+utils::error::Result<void> PackageManager::pruneUnused() noexcept
+{
+    std::vector<api::types::v1::PackageInfoV2> removed;
+    return Prune(removed);
 }
 
 auto PackageManager::InitRunContext(const QString &runContextCfg,

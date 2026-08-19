@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2025 UnionTech Software Technology Co., Ltd.
+// SPDX-FileCopyrightText: 2025-2026 UnionTech Software Technology Co., Ltd.
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
@@ -22,6 +22,11 @@ public:
     explicit TestableNVIDIADriverDetector(std::string versionFilePath)
         : NVIDIADriverDetector(std::move(versionFilePath))
     {
+    }
+
+    bool isVersionNewer(std::string_view candidate, std::string_view current) const noexcept
+    {
+        return compareVersions(candidate, current);
     }
 
     MOCK_METHOD((linglong::utils::error::Result<std::pair<bool, GraphicsDriverInfo>>),
@@ -51,6 +56,14 @@ protected:
         file.close();
     }
 };
+
+TEST_F(NvidiaDriverDetectorTest, CompareVersionsUsesSemanticOrdering)
+{
+    TestableNVIDIADriverDetector detector("unused-version-file");
+
+    EXPECT_TRUE(detector.isVersionNewer("510.100.0", "510.99.0"));
+    EXPECT_FALSE(detector.isVersionNewer("510.99.0", "510.100.0"));
+}
 
 TEST_F(NvidiaDriverDetectorTest, Detect_Success_PackageNotInstalled)
 {

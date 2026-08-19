@@ -23,6 +23,7 @@ using ::testing::_;
 using ::testing::AllOf;
 using ::testing::DoAll;
 using ::testing::Field;
+using ::testing::HasSubstr;
 using ::testing::IsSubsetOf;
 using ::testing::Return;
 using ::testing::SetArgReferee;
@@ -145,6 +146,8 @@ public:
                  const package::Reference &newRef,
                  bool removeOld),
                 (override, noexcept));
+
+    MOCK_METHOD(utils::error::Result<void>, pruneUnused, (), (override, noexcept));
 };
 
 class MockRepo : public repo::OSTreeRepo
@@ -179,6 +182,19 @@ public:
                 (override, const, noexcept));
 
     MOCK_METHOD(utils::error::Result<void>, mergeModules, (), (override, const, noexcept));
+
+    MOCK_METHOD(utils::error::Result<void>, prune, (), (override));
+};
+
+class MockPackageTask : public service::PackageTask
+{
+public:
+    MockPackageTask()
+        : service::PackageTask({})
+    {
+    }
+
+    MOCK_METHOD(void, sendMessage, (const std::string &message), (override, noexcept));
 };
 
 class PackageUpdateActionTest : public ::testing::Test
@@ -297,12 +313,200 @@ TEST_F(PackageUpdateActionTest, Update)
     EXPECT_CALL(*repo, mergeModules()).WillOnce([]() {
         return utils::error::Result<void>{};
     });
+    EXPECT_CALL(*pm, pruneUnused()).WillOnce([]() -> utils::error::Result<void> {
+        return LINGLONG_OK;
+    });
 
     EXPECT_CALL(*pm, switchAppVersion(_, _, true)).WillOnce(Return(utils::error::Result<void>{}));
 
     service::PackageTask task({});
     res = action->doAction(task);
     ASSERT_TRUE(res.has_value());
+}
+
+TEST_F(PackageUpdateActionTest, SkipPruneWhenNothingChanged)
+{
+    auto action =
+      service::PackageUpdateAction::create(std::vector<api::types::v1::PackageManager1Package>(),
+                                           false,
+                                           false,
+                                           *pm,
+                                           *repo);
+
+    EXPECT_CALL(*repo, listLocalApps())
+      .WillOnce(Return(std::vector<api::types::v1::PackageInfoV2>{ testdata::idV100 }));
+
+    auto res = action->prepare();
+    ASSERT_TRUE(res.has_value());
+
+    auto baseRef = package::Reference::fromPackageInfo(testdata::baseV100);
+    ASSERT_TRUE(baseRef.has_value());
+
+    auto runtimeRef = package::Reference::fromPackageInfo(testdata::runtimeV100);
+    ASSERT_TRUE(runtimeRef.has_value());
+
+    EXPECT_CALL(*pm, needToUpgrade(_, _, false))
+      // app has no updates
+      .WillOnce(Return(std::nullopt))
+      // runtime's extension has no updates
+      .WillOnce(Return(std::nullopt));
+    EXPECT_CALL(*pm, needToUpgrade(_, _, true))
+      // base has no updates
+      .WillOnce(DoAll(SetArgReferee<1>(*baseRef), Return(std::nullopt)))
+      // runtime has no updates
+      .WillOnce(DoAll(SetArgReferee<1>(*runtimeRef), Return(std::nullopt)));
+    EXPECT_CALL(*repo, getLayerItem(_, _, _))
+      .WillOnce(Return(utils::error::Result<api::types::v1::RepositoryCacheLayersItem>{
+        api::types::v1::RepositoryCacheLayersItem{ .info = testdata::baseV100 } }))
+      .WillOnce(Return(utils::error::Result<api::types::v1::RepositoryCacheLayersItem>{
+        api::types::v1::RepositoryCacheLayersItem{ .info = testdata::runtimeV100 } }));
+    EXPECT_CALL(*repo, mergeModules()).WillOnce(Return(utils::error::Result<void>{}));
+    EXPECT_CALL(*pm, pruneUnused()).Times(0);
+    EXPECT_CALL(*repo, prune()).Times(0);
+
+    service::PackageTask task({});
+    res = action->doAction(task);
+    ASSERT_TRUE(res.has_value());
+}
+
+TEST_F(PackageUpdateActionTest, PruneRepositoryWhenAutoPruneDisabled)
+{
+    auto action =
+      service::PackageUpdateAction::create(std::vector<api::types::v1::PackageManager1Package>(),
+                                           false,
+                                           true,
+                                           *pm,
+                                           *repo);
+
+    EXPECT_CALL(*repo, listLocalApps())
+      .WillOnce(Return(std::vector<api::types::v1::PackageInfoV2>{ testdata::id2V100 }));
+
+    auto res = action->prepare();
+    ASSERT_TRUE(res.has_value());
+
+    auto baseRef = package::Reference::fromPackageInfo(testdata::baseV101);
+    ASSERT_TRUE(baseRef.has_value());
+
+    auto runtimeRef = package::Reference::fromPackageInfo(testdata::runtimeV100);
+    ASSERT_TRUE(runtimeRef.has_value());
+
+    EXPECT_CALL(*pm, needToUpgrade(_, _, false))
+      .WillOnce(Return(std::make_pair(
+        package::ReferenceWithRepo{ .repo = api::types::v1::Repo{ .name = "repo" },
+                                    .reference =
+                                      package::Reference::parse("main:id2/1.1.0/x86_64").value() },
+        std::vector<std::string>{ "binary" })))
+      // runtime's extension has no updates
+      .WillOnce(Return(std::nullopt));
+    EXPECT_CALL(*pm, needToUpgrade(_, _, true))
+      .WillOnce(DoAll(SetArgReferee<1>(*baseRef), Return(std::nullopt)))
+      .WillOnce(DoAll(SetArgReferee<1>(*runtimeRef), Return(std::nullopt)));
+    EXPECT_CALL(*repo, fetchRefMetaData(_, "binary", true))
+      .WillOnce(Return(repo::RefMetaData{ "rev1", nlohmann::json(testdata::id2V110).dump() }));
+    EXPECT_CALL(*repo, getRefStatistics(_))
+      .WillOnce(Return(repo::RefStatistics{ .archived = 1024, .needed_archived = 512 }));
+    EXPECT_CALL(*repo, getLayerItem(_, _, _))
+      .WillOnce(Return(utils::error::Result<api::types::v1::RepositoryCacheLayersItem>{
+        api::types::v1::RepositoryCacheLayersItem{ .info = testdata::baseV101 } }))
+      .WillOnce(Return(utils::error::Result<api::types::v1::RepositoryCacheLayersItem>{
+        api::types::v1::RepositoryCacheLayersItem{ .info = testdata::runtimeV100 } }));
+    EXPECT_CALL(*pm, installRefModule(_, _, "binary"))
+      .WillOnce(Return(utils::error::Result<void>{}));
+    EXPECT_CALL(*pm, switchAppVersion(_, _, true)).WillOnce(Return(utils::error::Result<void>{}));
+    EXPECT_CALL(*repo, mergeModules()).WillOnce(Return(utils::error::Result<void>{}));
+    EXPECT_CALL(*pm, pruneUnused()).Times(0);
+    EXPECT_CALL(*repo, prune()).WillOnce(Return(utils::error::Result<void>{}));
+
+    service::PackageTask task({});
+    res = action->doAction(task);
+    ASSERT_TRUE(res.has_value());
+}
+
+TEST_F(PackageUpdateActionTest, InstallChangedDependencyAndPruneUnusedWhenAppUpdated)
+{
+    auto action =
+      service::PackageUpdateAction::create(std::vector<api::types::v1::PackageManager1Package>(),
+                                           false,
+                                           false,
+                                           *pm,
+                                           *repo);
+
+    EXPECT_CALL(*repo, listLocalApps())
+      .WillOnce(Return(std::vector<api::types::v1::PackageInfoV2>{ testdata::id2V100 }));
+
+    auto res = action->prepare();
+    ASSERT_TRUE(res.has_value());
+
+    auto runtimeRef = package::Reference::fromPackageInfo(testdata::runtimeV100);
+    ASSERT_TRUE(runtimeRef.has_value());
+
+    EXPECT_CALL(*pm, needToUpgrade(_, _, false))
+      .WillOnce(Return(std::make_pair(
+        package::ReferenceWithRepo{ .repo = api::types::v1::Repo{ .name = "repo" },
+                                    .reference =
+                                      package::Reference::parse("main:id2/1.1.0/x86_64").value() },
+        std::vector<std::string>{ "binary" })))
+      // runtime's extension has no updates
+      .WillOnce(Return(std::nullopt));
+    EXPECT_CALL(*pm, needToUpgrade(_, _, true))
+      // the updated app requires a new base
+      .WillOnce(Return(std::make_pair(
+        package::ReferenceWithRepo{ .repo = api::types::v1::Repo{ .name = "repo" },
+                                    .reference =
+                                      package::Reference::parse("main:base/1.0.1/x86_64").value() },
+        std::vector<std::string>{ "binary" })))
+      .WillOnce(DoAll(SetArgReferee<1>(*runtimeRef), Return(std::nullopt)));
+    EXPECT_CALL(*repo, fetchRefMetaData(_, "binary", true))
+      .WillOnce(Return(repo::RefMetaData{ "rev1", nlohmann::json(testdata::id2V110).dump() }))
+      .WillOnce(Return(repo::RefMetaData{ "rev2", nlohmann::json(testdata::baseV101).dump() }));
+    EXPECT_CALL(*repo, getRefStatistics(_)).Times(2).WillRepeatedly([](const repo::RefMetaData &) {
+        return utils::error::Result<repo::RefStatistics>{
+            repo::RefStatistics{ .archived = 1024, .needed_archived = 512 }
+        };
+    });
+    EXPECT_CALL(*repo, getLayerItem(_, _, _))
+      .WillOnce(Return(utils::error::Result<api::types::v1::RepositoryCacheLayersItem>{
+        api::types::v1::RepositoryCacheLayersItem{ .info = testdata::runtimeV100 } }));
+    EXPECT_CALL(*pm, installRefModule(_, _, "binary"))
+      .Times(2)
+      .WillRepeatedly([](service::Task &, const package::ReferenceWithRepo &, const std::string &) {
+          return utils::error::Result<void>{};
+      });
+    EXPECT_CALL(*pm, switchAppVersion(_, _, true)).WillOnce(Return(utils::error::Result<void>{}));
+    EXPECT_CALL(*repo, mergeModules()).WillOnce(Return(utils::error::Result<void>{}));
+    EXPECT_CALL(*pm, pruneUnused()).WillOnce(Return(utils::error::Result<void>{}));
+    EXPECT_CALL(*repo, prune()).Times(0);
+
+    service::PackageTask task({});
+    res = action->doAction(task);
+    ASSERT_TRUE(res.has_value());
+}
+
+TEST_F(PackageUpdateActionTest, SendMessageWhenAppUpdateFails)
+{
+    LINGLONG_TRACE("send update failure message");
+
+    auto action =
+      service::PackageUpdateAction::create(std::vector<api::types::v1::PackageManager1Package>(),
+                                           false,
+                                           false,
+                                           *pm,
+                                           *repo);
+
+    EXPECT_CALL(*repo, listLocalApps())
+      .WillOnce(Return(std::vector<api::types::v1::PackageInfoV2>{ testdata::idV100 }));
+
+    auto res = action->prepare();
+    ASSERT_TRUE(res.has_value());
+
+    EXPECT_CALL(*pm, needToUpgrade(_, _, false)).WillOnce(Return(LINGLONG_ERR("update error")));
+    EXPECT_CALL(*pm, pruneUnused()).Times(0);
+
+    MockPackageTask task;
+    EXPECT_CALL(task, sendMessage(HasSubstr("failed to update app id1: update error")));
+
+    res = action->doAction(task);
+    ASSERT_FALSE(res.has_value());
 }
 
 } // namespace

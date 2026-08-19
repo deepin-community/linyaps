@@ -40,7 +40,7 @@ class Printer;
 // 全局选项（仅用于verbose等通用选项）
 struct GlobalOptions
 {
-    bool verbose{ false };
+    int verbose{ 0 };
     bool noProgress{ false };
 };
 
@@ -62,7 +62,7 @@ struct RunOptions
     std::optional<bool> enableAtSpiSocketMount;
     bool privileged{ false };
     std::vector<std::string> capsAdd;
-    std::vector<std::string> cdiSpecDir = { "/etc/cdi", "/var/run/cdi" };
+    std::vector<std::string> cdiSpecDir = { "/etc/linglong/cdi", "/etc/cdi", "/var/run/cdi" };
     std::vector<std::string> cdiDevices;
     std::vector<api::types::v1::DeviceOption> deviceOptions;
     std::optional<std::string> instance;
@@ -97,13 +97,14 @@ struct InstallOptions
     std::optional<std::string> repo;
     bool forceOpt{ false };
     bool confirmOpt{ false };
+    bool noAutoPrune{ false };
 };
 
 struct UpgradeOptions
 {
     std::string appid; // 可选，为空时升级所有应用
-    bool appOnly{ false };
     bool depsOnly{ false };
+    bool noAutoPrune{ false };
 };
 
 struct SearchOptions
@@ -120,6 +121,7 @@ struct UninstallOptions
     std::string appid;
     std::string module;
     bool forceOpt{ false };
+    bool noAutoPrune{ false };
 };
 
 struct ListOptions
@@ -241,6 +243,8 @@ private:
       std::map<std::string, std::vector<api::types::v1::PackageInfoV2>> &list) noexcept;
     [[nodiscard]] utils::error::Result<std::vector<api::types::v1::CliContainer>>
     getCurrentContainers() const noexcept;
+    utils::error::Result<int> reuseContainer(const std::string &id,
+                                             const std::vector<std::string> &command) noexcept;
     int installFromFile(const QFileInfo &fileInfo,
                         const api::types::v1::CommonOptions &commonOptions);
     int setRepoConfig(const QVariantMap &config);
