@@ -2,10 +2,11 @@ Index: linyaps/misc/CMakeLists.txt
 ===================================================================
 --- linyaps.orig/misc/CMakeLists.txt
 +++ linyaps/misc/CMakeLists.txt
-@@ -43,6 +43,7 @@ configure_files(
+@@ -29,7 +29,8 @@ configure_files(
+   lib/systemd/system-environment-generators/61-linglong
+   lib/systemd/system/org.deepin.linglong.PackageManager.service
    lib/systemd/system-preset/91-linglong.preset
    lib/systemd/user-generators/linglong-user-systemd-generator
-   lib/systemd/user/linglong-session-helper.service
 +  lib/systemd/user/cn.org.linyaps.preloader.service
    lib/sysusers.d/linglong.conf
    lib/tmpfiles.d/linglong.conf
@@ -18,7 +19,7 @@ Index: linyaps/misc/lib/systemd/user/cn.org.linyaps.preloader.service
 +# SPDX-FileCopyrightText: 2025 UnionTech Software Technology Co., Ltd.
 +#
 +# SPDX-License-Identifier: LGPL-3.0-or-later
-+
++#
 +# This systemd service is used to preload Dtk and Qt libraries into the page cache,
 +# so some linyaps applications that use these libraries will start faster on their first launch
 +
