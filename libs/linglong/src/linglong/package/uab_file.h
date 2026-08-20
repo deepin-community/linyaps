@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 UnionTech Software Technology Co., Ltd.
+// SPDX-FileCopyrightText: 2024 - 2026 UnionTech Software Technology Co., Ltd.
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
@@ -10,42 +10,54 @@
 #include <gelf.h>
 #include <libelf.h>
 
-#include <QDir>
 #include <QString>
 
+#include <cstddef>
 #include <filesystem>
 #include <string>
+#include <string_view>
+
+#include <sys/types.h>
 
 namespace linglong::package {
 
-class UABFile : public QFile
+class UABFile
 {
 
     friend class MockUabFile;
 
 public:
-    static utils::error::Result<std::unique_ptr<UABFile>> loadFromFile(int fd) noexcept;
+    static utils::error::Result<std::unique_ptr<UABFile>>
+    loadFromFile(const std::filesystem::path &path) noexcept;
+    UABFile(const UABFile &) = delete;
+    UABFile &operator=(const UABFile &) = delete;
     UABFile(UABFile &&) = delete;
     UABFile &operator=(UABFile &&) = delete;
-    ~UABFile() override;
+    virtual ~UABFile();
 
     utils::error::Result<bool> verify() noexcept;
-    utils::error::Result<std::filesystem::path> unpack() noexcept;
+    utils::error::Result<void> unpack(const std::filesystem::path &destination) noexcept;
 
-    // this method will extract sign data to a temporary directory, caller should remove it
-    utils::error::Result<std::filesystem::path> extractSignData() noexcept;
+    // Caller should remove destination after use.
+    utils::error::Result<std::filesystem::path>
+    extractSignData(const std::filesystem::path &destination) noexcept;
     [[nodiscard]] utils::error::Result<std::reference_wrapper<const api::types::v1::UabMetaInfo>>
     getMetaInfo() noexcept;
 
 private:
     [[nodiscard]] utils::error::Result<GElf_Shdr>
     getSectionHeader(const QString &section) const noexcept;
+    [[nodiscard]] utils::error::Result<std::string> readSectionData(const QString &section,
+                                                                    std::size_t offset,
+                                                                    std::size_t size) noexcept;
+    [[nodiscard]] utils::error::Result<std::reference_wrapper<const api::types::v1::UabMetaInfo>>
+    parseMetaInfo(std::string_view content) noexcept;
     UABFile() = default;
 
+    int fd{ -1 };
     Elf *e{ nullptr };
     std::unique_ptr<api::types::v1::UabMetaInfo> metaInfo{ nullptr };
     std::string m_mountPoint;
-    std::string m_unpackPath;
 
     // 判断fd是否可在其他进程读取
     virtual bool isFileReadable(const std::string &path) const;
@@ -55,6 +67,7 @@ private:
     virtual utils::error::Result<void> mkdirDir(const std::string &path) noexcept;
     // 判断命令是否存在
     virtual bool checkCommandExists(const std::string &command) const;
+    virtual ssize_t writeData(int fd, const void *data, std::size_t size) const noexcept;
 };
 
 } // namespace linglong::package

@@ -4,7 +4,10 @@
 
 #include "uab_installation.h"
 
+#include "linglong/utils/finally/finally.h"
 #include "linglong/utils/log/log.h"
+
+#include <unistd.h>
 
 namespace linglong::service {
 
@@ -189,13 +192,17 @@ utils::error::Result<void> UabInstallationAction::prepare()
 {
     LINGLONG_TRACE("uab installation prepare");
 
-    if (this->uabFile) {
-        return LINGLONG_OK;
-    }
+    taskName = "installing uab";
+    return LINGLONG_OK;
+}
 
-    auto uabFileRet = package::UABFile::loadFromFile(fd);
+utils::error::Result<void> UabInstallationAction::loadUABFile(const std::filesystem::path &path)
+{
+    LINGLONG_TRACE("load staged uab file");
+
+    auto uabFileRet = package::UABFile::loadFromFile(path);
     if (!uabFileRet) {
-        return LINGLONG_ERR(fmt::format("failed to load uab file from fd {}", fd), uabFileRet);
+        return LINGLONG_ERR(fmt::format("failed to load staged uab file {}", path), uabFileRet);
     }
     auto uabFile = std::move(uabFileRet).value();
 
@@ -227,19 +234,45 @@ utils::error::Result<void> UabInstallationAction::prepare()
         checkedLayers = std::move(res).value();
     }
 
-    this->taskName = fmt::format("installing uab");
     this->uabFile = std::move(uabFile);
 
     return LINGLONG_OK;
+}
+
+utils::error::Result<void> UabInstallationAction::prepareUAB()
+{
+    LINGLONG_TRACE("prepare staged uab file");
+
+    auto stagedFileRet = pm.copyToStaging(fd);
+    if (!stagedFileRet) {
+        return LINGLONG_ERR(stagedFileRet);
+    }
+    auto stagedFile = std::move(stagedFileRet).value();
+
+    auto ret = pm.executeInstallHooks(stagedFile);
+    if (!ret) {
+        return LINGLONG_ERR(ret);
+    }
+
+    uabMountPoint = stagedFile;
+    uabMountPoint += ".unpack";
+    uabMountPoint /= "unpack";
+
+    return loadUABFile(stagedFile);
 }
 
 utils::error::Result<void> UabInstallationAction::doAction(PackageTask &task)
 {
     LINGLONG_TRACE("uab installation action");
 
-    if (!uabFile) {
-        return LINGLONG_ERR("action not prepared");
-    }
+    auto cleanupStaging = utils::finally::finally([this] {
+        // Unmount the bundle before removing its staging directory.
+        uabFile.reset();
+        auto ret = pm.cleanStaging();
+        if (!ret) {
+            LogW("failed to clean staging directory: {}", ret.error());
+        }
+    });
 
     auto ret = preInstall(task);
     if (!ret) {
@@ -257,6 +290,13 @@ utils::error::Result<void> UabInstallationAction::doAction(PackageTask &task)
 utils::error::Result<void> UabInstallationAction::preInstall(PackageTask &task)
 {
     LINGLONG_TRACE("uab installation preInstall");
+
+    task.updateState(linglong::api::types::v1::State::Processing, "preparing uab");
+
+    auto ret = prepareUAB();
+    if (!ret) {
+        return ret;
+    }
 
     task.updateState(linglong::api::types::v1::State::Processing, "installing uab");
 
@@ -301,11 +341,10 @@ utils::error::Result<void> UabInstallationAction::install([[maybe_unused]] Packa
 
     task.updateProgress(10);
 
-    auto mountPoint = uabFile->unpack();
-    if (!mountPoint) {
-        return LINGLONG_ERR(mountPoint);
+    auto ret = uabFile->unpack(uabMountPoint);
+    if (!ret) {
+        return LINGLONG_ERR(ret);
     }
-    uabMountPoint = std::move(mountPoint).value();
 
     task.updateProgress(15);
 
@@ -324,15 +363,22 @@ utils::error::Result<void> UabInstallationAction::postInstall(PackageTask &task)
     const auto &newRef = operation.newRef->reference;
     const auto &oldRef = operation.oldRef;
 
-    auto res = repo.mergeModules();
-    if (!res) {
-        LogE("merge modules failed: {}", res.error());
+    auto merged = repo.mergeModules();
+    if (!merged) {
+        LogE("merge modules failed: {}", merged.error());
     }
 
     auto ret = pm.executePostInstallHooks(newRef);
+
+    transaction.addRollBack([this, ref = newRef]() noexcept {
+        auto ret = pm.executePostUninstallHooks(ref);
+        if (!ret) {
+            LogE("failed to compensate post-install hooks for {}: {}", ref.toString(), ret.error());
+        }
+    });
+
     if (!ret) {
-        task.reportError(std::move(ret).error());
-        return LINGLONG_ERR("failed to execute post install hooks");
+        LogW("failed to execute post-install hooks for {}: {}", newRef.toString(), ret.error());
     }
 
     if (operation.kind == "app") {
@@ -376,7 +422,7 @@ utils::error::Result<void> UabInstallationAction::installUabLayer(
         }
 
         std::vector<std::filesystem::path> overlays;
-        auto signPath = uabFile->extractSignData();
+        auto signPath = uabFile->extractSignData(uabMountPoint.parent_path() / "sign-data");
         if (!signPath) {
             return LINGLONG_ERR(signPath);
         }
@@ -408,11 +454,6 @@ utils::error::Result<void> UabInstallationAction::installUabLayer(
             auto ret = this->repo.remove(ref, module, subRef);
             if (!ret) {
                 LogE("rollback importLayerDir failed: {}", ret.error());
-            }
-
-            ret = pm.executePostUninstallHooks(ref);
-            if (!ret) {
-                LogE("failed to rollback execute uninstall hooks: {}", ret.error());
             }
         });
     }
