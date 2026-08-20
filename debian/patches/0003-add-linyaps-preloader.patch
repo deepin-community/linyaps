@@ -2,8 +2,7 @@ Index: linyaps/misc/CMakeLists.txt
 ===================================================================
 --- linyaps.orig/misc/CMakeLists.txt
 +++ linyaps/misc/CMakeLists.txt
-@@ -29,7 +29,8 @@ configure_files(
-   lib/systemd/system-environment-generators/61-linglong
+@@ -30,6 +30,7 @@ configure_files(
    lib/systemd/system/org.deepin.linglong.PackageManager.service
    lib/systemd/system-preset/91-linglong.preset
    lib/systemd/user-generators/linglong-user-systemd-generator
