@@ -10,6 +10,17 @@ Index: linyaps/misc/CMakeLists.txt
    lib/sysusers.d/linglong.conf
    lib/tmpfiles.d/linglong.conf
    script/linglong.sh
+@@ -130,6 +131,10 @@ set(SYSTEMD_SYSTEM_UNIT_PATH ${CMAKE_INSTALL_PREFIX}/lib/systemd)
+ install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib/systemd/system
+         DESTINATION ${SYSTEMD_SYSTEM_UNIT_PATH})
+ 
++set(SYSTEMD_USER_UNIT_PATH ${CMAKE_INSTALL_PREFIX}/lib/systemd)
++install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib/systemd/user
++        DESTINATION ${SYSTEMD_USER_UNIT_PATH})
++
+ set(SYSTEMD_SYSTEM_GENERATOR_PATH
+     ${CMAKE_INSTALL_PREFIX}/lib/systemd/system-environment-generators)
+ 
 Index: linyaps/misc/lib/systemd/user/cn.org.linyaps.preloader.service
 ===================================================================
 --- /dev/null
