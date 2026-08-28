@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# SPDX-FileCopyrightText: 2023 UnionTech Software Technology Co., Ltd.
+# SPDX-FileCopyrightText: 2023 - 2026 UnionTech Software Technology Co., Ltd.
 #
 # SPDX-License-Identifier: LGPL-3.0-or-later
 
@@ -27,7 +27,6 @@ if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-decon
                         systemctl --user --machine="$instance"@ daemon-reload >/dev/null || true
                 done
                 for instance in $instances; do
-                        systemctl --user --machine="$instance"@ restart linglong-session-helper.service >/dev/null || true
                         systemctl --global --machine="${instance}"@ enable cn.org.linyaps.preloader.service > /dev/null || true
                 done
         fi
