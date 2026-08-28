@@ -1,0 +1,38 @@
+Index: linyaps/misc/CMakeLists.txt
+===================================================================
+--- linyaps.orig/misc/CMakeLists.txt
++++ linyaps/misc/CMakeLists.txt
+@@ -51,7 +51,8 @@ configure_files(
+   share/mime/packages/vnd.linyaps.uab.xml
+   share/polkit-1/actions/org.deepin.linglong.PackageManager1.policy
+   share/icons/linyaps.svg
+-  share/applications/linyaps.desktop)
++  share/applications/linyaps.desktop
++  etc/linglong/config.json)
+ 
+ # bash-completion
+ set(BASH_COMPLETIONS_DIR ${CMAKE_INSTALL_DATADIR}/bash-completion)
+@@ -179,6 +180,10 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR
+ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/script/linglong.sh
+         DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/profile.d)
+ 
++# install systemd config
++install(FILES ${CMAKE_CURRENT_BINARY_DIR}/etc/linglong/config.json
++        DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/linglong)
++
+ install(
+   FILES ${CMAKE_CURRENT_BINARY_DIR}/script/linglong.sh
+   DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/X11/Xsession.d/
+Index: linyaps/misc/etc/linglong/config.json
+===================================================================
+--- /dev/null
++++ linyaps/misc/etc/linglong/config.json
+@@ -0,0 +1,8 @@
++{
++    "device_mode": [
++        "passthru"
++    ],
++    "disable_xdp": true,
++    "enable_pipewire": true,
++    "enable_atspi": true
++}

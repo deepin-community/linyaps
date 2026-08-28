@@ -1,0 +1,35 @@
+From 8b7697bf3c6230f6eec8faca146b1672180c84f4 Mon Sep 17 00:00:00 2001
+From: wrj97 <wurongjie@deepin.org>
+Date: Mon, 2 Feb 2026 16:23:20 +0800
+Subject: [PATCH] feat: extend path mapping skip list
+
+---
+ libs/linglong/src/linglong/cli/cli.cpp | 14 +++++++++++---
+ 1 file changed, 11 insertions(+), 3 deletions(-)
+
+Index: linyaps/libs/linglong/src/linglong/cli/cli.cpp
+===================================================================
+--- linyaps.orig/libs/linglong/src/linglong/cli/cli.cpp
++++ linyaps/libs/linglong/src/linglong/cli/cli.cpp
+@@ -1798,8 +1798,19 @@ int Cli::content(const ContentOptions &o
+     if (homeStr.back() != '/') {
+         homeStr.push_back('/');
+     }
+-    if (auto tmp = target.string(); tmp.rfind(homeStr, 0) == 0) {
+-        return target;
++
++    // Do not mapping files in the following directories, which have been mounted into the container
++    std::vector<std::string> skipMappingPaths{ homeStr,
++                                               "/persistent",
++                                               "/media/",
++                                               "/usr/share/icons/",
++                                               "/usr/share/fonts/",
++                                               "/usr/share/wallpapers/",
++                                               "/usr/share/themes/" };
++    for (const auto &path : skipMappingPaths) {
++        if (auto tmp = target.string(); tmp.rfind(path, 0) == 0) {
++            return target;
++        }
+     }
+ 
+     return std::filesystem::path{ "/run/host/rootfs" }
