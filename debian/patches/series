@@ -4,3 +4,4 @@
 0004-deepin-skip-path-mapping.patch
 0005-repo-token.patch
 0006-feat-add-system-config.patch
+0007-add-host-dynamic-paths.patch
