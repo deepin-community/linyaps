@@ -1,8 +1,8 @@
-diff --git a/libs/linglong/src/linglong/runtime/run_context.cpp b/libs/linglong/src/linglong/runtime/run_context.cpp
---- a/libs/linglong/src/linglong/runtime/run_context.cpp
-+++ b/libs/linglong/src/linglong/runtime/run_context.cpp
-@@ -847,8 +847,14 @@ void RunContext::resolveHostDynamic()
- void RunContext::resolveHostDynamic()
+Index: linyaps/libs/linglong/src/linglong/runtime/run_context.cpp
+===================================================================
+--- linyaps.orig/libs/linglong/src/linglong/runtime/run_context.cpp
++++ linyaps/libs/linglong/src/linglong/runtime/run_context.cpp
+@@ -848,7 +848,13 @@ void RunContext::resolveHostDynamic()
  {
      LINGLONG_TRACE("resolve host dynamic paths");
  

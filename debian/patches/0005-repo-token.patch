@@ -12,11 +12,11 @@ Content-Transfer-Encoding: 8bit
  .../src/linglong/repo/ostree_repo.cpp         | 34 +++++++++++++++++++
  1 file changed, 34 insertions(+)
 
-diff --git a/libs/linglong/src/linglong/repo/ostree_repo.cpp b/libs/linglong/src/linglong/repo/ostree_repo.cpp
-index aeae4398..7e7a3ca2 100644
---- a/libs/linglong/src/linglong/repo/ostree_repo.cpp
-+++ b/libs/linglong/src/linglong/repo/ostree_repo.cpp
-@@ -1241,6 +1241,28 @@ OSTreeRepo::getRefStatistics(const RefMetaData &meta) const noexcept
+Index: linyaps/libs/linglong/src/linglong/repo/ostree_repo.cpp
+===================================================================
+--- linyaps.orig/libs/linglong/src/linglong/repo/ostree_repo.cpp
++++ linyaps/libs/linglong/src/linglong/repo/ostree_repo.cpp
+@@ -1344,6 +1344,28 @@ OSTreeRepo::getRefStatistics(const RefMe
      return stat;
  }
  
@@ -45,7 +45,7 @@ index aeae4398..7e7a3ca2 100644
  // 初始化一个GVariantBuilder
  GVariantBuilder OSTreeRepo::initOStreePullOptions(const std::string &ref) noexcept
  {
-@@ -1261,6 +1283,18 @@ GVariantBuilder OSTreeRepo::initOStreePullOptions(const std::string &ref) noexce
+@@ -1364,6 +1386,18 @@ GVariantBuilder OSTreeRepo::initOStreePu
                            "{s@v}",
                            "refs",
                            g_variant_new_variant(g_variant_new_strv(refs.data(), -1)));
@@ -64,6 +64,3 @@ index aeae4398..7e7a3ca2 100644
      return builder;
  }
  
--- 
-2.51.0
-

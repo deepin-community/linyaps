@@ -1,9 +1,9 @@
-Index: linyaps-bak/libs/oci-cfg-generators/src/linglong/oci-cfg-generators/container_cfg_builder.cpp
-===================================================================
---- linyaps-bak.orig/libs/oci-cfg-generators/src/linglong/oci-cfg-generators/container_cfg_builder.cpp
-+++ linyaps-bak/libs/oci-cfg-generators/src/linglong/oci-cfg-generators/container_cfg_builder.cpp
-@@ -586,6 +591,8 @@ ContainerCfgBuilder &ContainerCfgBuilder
-        bindIfExist(*hostStaticsMount, loc);
+diff --git a/libs/oci-cfg-generators/src/linglong/oci-cfg-generators/container_cfg_builder.cpp b/libs/oci-cfg-generators/src/linglong/oci-cfg-generators/container_cfg_builder.cpp
+index 72d58901..5b419c2e 100644
+--- a/libs/oci-cfg-generators/src/linglong/oci-cfg-generators/container_cfg_builder.cpp
++++ b/libs/oci-cfg-generators/src/linglong/oci-cfg-generators/container_cfg_builder.cpp
+@@ -611,6 +611,8 @@ ContainerCfgBuilder &ContainerCfgBuilder::bindHostStatics() noexcept
+         bindIfExist(*hostStaticsMount, loc);
      }
  
 +    bindIfExist(*hostStaticsMount, "/persistent", "/persistent", false);

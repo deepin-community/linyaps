@@ -11,7 +11,7 @@ Index: linyaps/libs/linglong/src/linglong/cli/cli.cpp
 ===================================================================
 --- linyaps.orig/libs/linglong/src/linglong/cli/cli.cpp
 +++ linyaps/libs/linglong/src/linglong/cli/cli.cpp
-@@ -1798,8 +1798,19 @@ int Cli::content(const ContentOptions &o
+@@ -3183,8 +3183,19 @@ int Cli::content(const ContentOptions &o
      if (homeStr.back() != '/') {
          homeStr.push_back('/');
      }
