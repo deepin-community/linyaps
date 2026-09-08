@@ -18,6 +18,7 @@ usr/libexec/linglong/ll-driver-detect
 usr/libexec/linglong/ll-init
 usr/share/bash-completion/completions/ll-cli
 usr/share/zsh/vendor-completions/_ll-cli
+usr/share/fish/vendor_completions.d/ll-cli.fish
 usr/share/dbus-1/system-services/org.deepin.linglong.PackageManager1.service
 usr/share/dbus-1/system.d/org.deepin.linglong.PackageManager1.conf
 usr/share/linglong/config.yaml
