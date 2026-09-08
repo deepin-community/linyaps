@@ -10,7 +10,7 @@ Index: linyaps/misc/CMakeLists.txt
    lib/sysusers.d/linglong.conf
    lib/tmpfiles.d/linglong.conf
    script/linglong.sh
-@@ -130,6 +131,10 @@ set(SYSTEMD_SYSTEM_UNIT_PATH ${CMAKE_INSTALL_PREFIX}/lib/systemd)
+@@ -134,6 +135,10 @@ set(SYSTEMD_SYSTEM_UNIT_PATH ${CMAKE_INS
  install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib/systemd/system
          DESTINATION ${SYSTEMD_SYSTEM_UNIT_PATH})
  
