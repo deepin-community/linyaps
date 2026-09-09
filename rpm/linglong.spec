@@ -86,17 +86,13 @@ cd build
 %{_prefix}/lib/tmpfiles.d/*.conf
 %{_prefix}/lib/systemd/system/*.service
 %{_prefix}/lib/systemd/system-preset/*.preset
-%{_prefix}/lib/systemd/user/*
 %{_prefix}/lib/systemd/system-environment-generators/*
 %{_prefix}/lib/systemd/user-generators/*
 %{_libexecdir}/%{name}/ll-package-manager
-%{_libexecdir}/%{name}/ll-session-helper
 %{_libexecdir}/%{name}/ld-cache-generator
 %{_libexecdir}/%{name}/font-cache-generator
-%{_libexecdir}/%{name}/ll-dialog
 %{_libexecdir}/%{name}/ll-init
 %{_libexecdir}/%{name}/ll-driver-detect
-%{_libexecdir}/%{name}/dialog/99-linglong-permission
 %{_datadir}/bash-completion/completions/ll-cli
 %{_datadir}/zsh/vendor-completions/_ll-cli
 %{_datadir}/dbus-1/system-services/*.service
