@@ -2,7 +2,7 @@ Index: linyaps/misc/CMakeLists.txt
 ===================================================================
 --- linyaps.orig/misc/CMakeLists.txt
 +++ linyaps/misc/CMakeLists.txt
-@@ -49,7 +49,8 @@ configure_files(
+@@ -49,7 +49,8 @@
    share/mime/packages/vnd.linyaps.uab.xml
    share/polkit-1/actions/org.deepin.linglong.PackageManager1.policy
    share/icons/linyaps.svg
@@ -10,9 +10,9 @@ Index: linyaps/misc/CMakeLists.txt
 +  share/applications/linyaps.desktop
 +  etc/linglong/config.json)
  
- # bash-completion
- set(BASH_COMPLETIONS_DIR ${CMAKE_INSTALL_DATADIR}/bash-completion)
-@@ -175,6 +176,10 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR
+ configure_file(share/linglong/builder/templates/example.yaml
+                share/linglong/builder/templates/example.yaml COPYONLY)
+@@ -183,6 +184,10 @@
  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/script/linglong.sh
          DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/profile.d)
  
