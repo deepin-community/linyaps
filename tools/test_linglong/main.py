@@ -995,6 +995,10 @@ class SmokeTest:
     #    - repo show --json 不支持 --json（rc=109）
     #    这两个故意放在错误路径用例里，用来覆盖参数校验分支。
     def test_readonly_query_commands(self):
+        # 前面的用例会起容器（GUI 应用装/升级后 DBus 服务还会自动拉起），
+        # 容器退出与服务端记录的回收都是异步的 —— 不能假设"此刻必然无
+        # 容器"（实测 run64/run65：日历容器退出后 ps 里仍有残留记录）。
+        self._ensure_no_containers()
         # ps：列出运行中的容器。没有应用在跑时给中文提示，退出码 0
         r = self._ll_cli("ps")
         if r.returncode != 0:
@@ -1527,7 +1531,14 @@ class SmokeTest:
         return status >> 8, buf.decode("utf-8", "replace")
 
     # ── Helper: 等待容器出现并返回容器 ID ──
-    def _wait_container(self, timeout: int = 40) -> str:
+    def _wait_container(self, timeout: int = 40, app_id: str = "") -> str:
+        """等 ps 里出现指定应用的容器，返回容器 ID（超时返回空串）。
+
+        ⚠️ 不能直接取 ps 的第一条：机器上可能残留别的容器（GUI 应用被
+        DBus 服务拉起、上一轮没退干净的），第一条不一定是我们刚起的。
+        实测 run64/65：日历容器排在 demo 容器前面，导致容器生命周期用例
+        把日历的容器当成 demo 的，误判失败。
+        """
         deadline = time.time() + timeout
         while time.time() < deadline:
             r = self._ll_cli("ps", "--json", check=False)
@@ -1536,8 +1547,10 @@ class SmokeTest:
                     arr = json.loads(r.stdout)
                 except json.JSONDecodeError:
                     arr = []
-                if arr:
-                    return arr[0].get("id", "")
+                for item in arr:
+                    pkg = item.get("package", "")
+                    if not app_id or f"main:{app_id}/" in pkg:
+                        return item.get("id", "")
             time.sleep(2)
         return ""
 
@@ -1564,6 +1577,33 @@ class SmokeTest:
             self._ll_cli("kill", app_id, timeout=60, check=False)
             time.sleep(3)
         # 超时也返回，让上层的断言去报告问题，不在这里静默吞掉
+
+    # ── Helper: 确保 ps 里没有容器（含服务端残留记录）──
+    #
+    # _cleanup_containers 只能杀掉还活着的容器；容器进程被 SIGKILL 后，
+    # PackageManager 服务端可能留下"僵尸记录"，ps 仍会把它列出来，而对
+    # 它执行 kill 只会得到 "no container found"。这时只能重启服务让它
+    # 重新扫描容器目录。ps 用例要断言"无容器的中文提示"，必须先过这关。
+    def _ensure_no_containers(self, app_id: str = "", timeout: int = 20):
+        def _listed():
+            r = self._ll_cli("ps", "--json", check=False)
+            try:
+                return json.loads(r.stdout) if r.returncode == 0 else []
+            except json.JSONDecodeError:
+                return []
+
+        if not app_id:
+            app_id = CALENDAR_APP_ID  # 真机实测最容易残留的是 GUI 日历应用
+        self._cleanup_containers(app_id, timeout=timeout)
+        if not _listed():
+            return
+        # 记录残留：重启服务重新扫描后再清一遍
+        self._restart_package_manager()
+        self._cleanup_containers(app_id, timeout=timeout)
+        items = _listed()
+        if items:
+            ids = ", ".join(str(i.get("id", "?")) for i in items)
+            raise AssertionError(f"清理后仍残留容器记录: {ids}")
 
     # ── Test: ll-cli run 的运行期选项 ──
     #
@@ -1597,11 +1637,14 @@ class SmokeTest:
     # checkContainerStatus / acceptConsoleFd / setupIOChannels 等函数。
     def test_container_lifecycle(self):
         app_id = DEMO_APP_ID
+        # 机器上可能残留别的容器（GUI 应用被 DBus 服务拉起），先清干净，
+        # 否则 ps 里第一条不一定是本用例刚起的 demo 容器。
+        self._cleanup_containers(app_id)
         proc = subprocess.Popen(
             [LL_CLI, "run", app_id, "--", "sleep", "120"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
-            cid = self._wait_container(timeout=40)
+            cid = self._wait_container(timeout=40, app_id=app_id)
             if not cid:
                 raise AssertionError("容器已启动但 ll-cli ps 看不到它")
 
@@ -1619,7 +1662,8 @@ class SmokeTest:
                 arr = json.loads(r.stdout)
             except json.JSONDecodeError as e:
                 raise AssertionError(f"ll-cli ps --json 非法 JSON: {e}")
-            if not arr or arr[0].get("id") != cid:
+            entry = next((c for c in arr if c.get("id") == cid), None)
+            if entry is None:
                 raise AssertionError(
                     f"ps --json 应含容器 {cid}, 实际: {r.stdout[:200]!r}")
 
@@ -1627,7 +1671,7 @@ class SmokeTest:
             # （cli.cpp:102 ContainerIDDisplayLength），--no-truncated 才给全长。
             # 只断言 rc==0 证明不了截断逻辑 —— 必须验证 12 位这个长度、
             # 全长确实更长、以及"短 ID 是全 ID 的前缀"这层关系。
-            short_entry = arr[0]
+            short_entry = entry
             r = self._ll_cli("ps", "--no-truncated", "--json", timeout=60,
                              check=False)
             if r.returncode != 0:
@@ -1723,7 +1767,7 @@ class SmokeTest:
             [LL_CLI, "run", app_id, "--instance", inst, "--", "sleep", "120"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
-            cid = self._wait_container(timeout=40)
+            cid = self._wait_container(timeout=40, app_id=app_id)
             if not cid:
                 raise AssertionError("带 --instance 启动的容器未出现在 ll-cli ps 中")
 
@@ -2668,7 +2712,7 @@ class SmokeTest:
             [LL_CLI, "run", app_id, "--instance", inst, "--", "sleep", "300"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
-            if not self._wait_container(timeout=40):
+            if not self._wait_container(timeout=40, app_id=app_id):
                 raise AssertionError("带 --instance 启动的容器没出现在 ps 里")
 
             # 关键：用 pty（终端）去复用，才会走交互 I/O 那块
@@ -2722,7 +2766,7 @@ class SmokeTest:
                  "sleep", "300"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             try:
-                cid = self._wait_container(timeout=40)
+                cid = self._wait_container(timeout=40, app_id=app_id)
                 if not cid:
                     raise AssertionError("带 --instance 启动的容器没出现在 ps 里")
                 r = self._ll_cli("kill", app_id, timeout=60, check=False)
@@ -4128,18 +4172,18 @@ class SmokeTest:
         if not snapshot:
             raise AssertionError(
                 "拒绝用空快照还原安装状态（那会把机器上的应用全卸掉）")
-        # 硬护栏（比例判据）：要卸载的数量 >= 快照总数时拒绝。
-        # 历史上这里因为快照格式不匹配，把"全部应用"都当成多余的卸掉过
-        # 【两次】，把机器清空。原来的绝对阈值（"超过 2 个就拒绝"）挡得住
-        # 灾难，却会误伤合法用例：例如"强制重装"会合法地多出 3 个 ref
-        # （被降级的应用 + 被顺带拉进来的旧 base），于是它无法自还原。
-        # 比例判据表达的是：不可能合法地卸载"比你知道的还多"的应用。
+        # 硬护栏：唯一绝不允许的情况是把机器上【当前所有】应用都卸掉
+        # （那等于清空机器）。历史上这里是按"卸载数 >= 快照总数"的比例
+        # 判据，本意是防快照格式不匹配导致的灾难，但会误伤合法场景：
+        # 日历模块用例会合法地多出 7 个 ref（5.14.x 的 binary/develop/
+        # lang-ja + 被顺带拉进来的旧 base/runtime），正好等于快照总数，
+        # 于是还原被拒绝、机器被留在脏状态（实测 run64/run65 两次）。
+        # 真正危险的只有"快照里一个应用都对不上"的情况。
         extra = now - snapshot
-        if extra and len(extra) >= len(snapshot):
+        if extra and extra >= now:
             raise AssertionError(
-                f"拒绝：要卸载 {len(extra)} 个 ref，不少于快照总数 "
-                f"{len(snapshot)} 个（疑似快照不匹配，会清空机器）: "
-                f"{sorted(extra)}")
+                f"拒绝：快照里没有任何已装应用，要卸载全部 {len(now)} 个 ref"
+                f"（疑似快照不匹配，会清空机器）: {sorted(extra)}")
         for ref in sorted(extra):
             parts = ref.split("/")
             i, v = parts[0], parts[1]
@@ -4322,7 +4366,7 @@ class SmokeTest:
             finally:
                 os._exit(127)
         try:
-            if not self._wait_container(timeout=40):
+            if not self._wait_container(timeout=40, app_id=app_id):
                 raise AssertionError("PTY 下启动的容器未出现在 ll-cli ps 中")
 
             # 复用同一实例：走 reuseContainer + acceptConsoleFd + PTY 传递
@@ -5982,8 +6026,13 @@ class SmokeTest:
 
         # --privileged 必须 root：先以非 root 拿"拒绝"分支，
         # 再以 root 走真正启用的分支。
-        self._ll_cli("run", app, "--instance", inst, "--privileged",
-                     "--", "/bin/echo", "PRIV", timeout=120, check=False)
+        r = self._ll_cli("run", app, "--instance", inst, "--privileged",
+                         "--", "/bin/echo", "PRIV", timeout=120, check=False)
+        if r.returncode == 0:
+            raise AssertionError("非 root + --privileged 居然成功了")
+        if "privileged mode requires running as root" not in (r.stdout + r.stderr):
+            raise AssertionError(
+                f"非 root + --privileged 报错不对: {(r.stdout + r.stderr)[:300]}")
 
         r = self._sudo_ll_cli("run", app, "--instance", inst,
                               "--privileged", "--", "/bin/echo", "PRIVROOT",
@@ -5991,6 +6040,24 @@ class SmokeTest:
         if r.returncode != 0:
             raise AssertionError(
                 f"root + --privileged 失败: {(r.stdout + r.stderr)[:300]}")
+
+        # root 不显式传 --privileged 也必须自动进入 privileged 模式：
+        # 与宿主机共享 user namespace，并获得原有的 privilege capabilities。
+        hostUserNs = self._run_cmd(["readlink", "/proc/self/ns/user"], sudo=True)
+        r = self._sudo_ll_cli(
+            "run", app, "--instance", inst + "auto", "--", "/bin/sh", "-c",
+            "printf 'USERNS=%s\\n' \"$(readlink /proc/self/ns/user)\"; "
+            "awk '/^CapEff:/{printf \"CAPEFF=%s\\n\", $2}' /proc/self/status",
+            timeout=180, check=False)
+        if r.returncode != 0:
+            raise AssertionError(
+                f"root 自动 privileged 失败: {(r.stdout + r.stderr)[:300]}")
+        if f"USERNS={hostUserNs.stdout.strip()}" not in r.stdout:
+            raise AssertionError(
+                f"root 自动 privileged 未共享宿主机 user namespace: {r.stdout[:300]}")
+        if "CAPEFF=00000000800435fb" not in r.stdout:
+            raise AssertionError(
+                f"root 自动 privileged capabilities 不匹配: {r.stdout[:300]}")
 
         # --caps-add（delimiter 为逗号）
         r = self._ll_cli("run", app, "--instance", inst + "c",
@@ -6120,7 +6187,7 @@ class SmokeTest:
                                 "--", "sleep", "240"], env)
                 finally:
                     os._exit(127)
-            if not self._wait_container(timeout=60):
+            if not self._wait_container(timeout=60, app_id=app):
                 raise AssertionError("旧版本容器没起来，无法构造 busy 场景")
 
             # 3) 运行中升级：这一步才会走 tryUninstallRef + markDeleted
