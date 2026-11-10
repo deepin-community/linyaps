@@ -7,13 +7,17 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "linglong/common/strings.h"
 #include "linglong/oci-cfg-generators/container_cfg_builder.h"
+#include "linglong/utils/cmd.h"
 #include "ocppi/runtime/config/types/NamespaceType.hpp"
 
 #include <common/tempdir.h>
+#include <nlohmann/json.hpp>
 
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <vector>
 
 using namespace linglong::generator;
@@ -411,6 +415,114 @@ TEST_F(ContainerCfgBuilderTest, ForwardAndAppendEnv)
     EXPECT_THAT(content, ::testing::HasSubstr(R"(QUOTED='a'\''b')"));
 }
 
+TEST_F(ContainerCfgBuilderTest, EnvScriptRoundTripsSpecialCharacters)
+{
+    struct EnvCase
+    {
+        std::string key;
+        std::string value;
+        std::string expectedLine;
+    };
+
+    const std::vector<EnvCase> cases = {
+        { "PLAIN", "bar", "export PLAIN='bar'" },
+        { "QUOTED", "a'b", R"(export QUOTED='a'\''b')" },
+        { "SPACES", "a b", "export SPACES='a b'" },
+        { "DOLLAR", "$HOME", "export DOLLAR='$HOME'" },
+        { "BACKTICK", "`id`", "export BACKTICK='`id`'" },
+        { "DQUOTE", "\"x\"", "export DQUOTE='\"x\"'" },
+        { "EMPTY", "", "export EMPTY=''" },
+        { "CONSECUTIVE", "a''b", R"(export CONSECUTIVE='a'\'''\''b')" },
+    };
+
+    ContainerCfgBuilder builder;
+    builder.setAppId("org.deepin.demo").setBasePath(baseDir.path()).setBundlePath(bundleDir.path());
+    for (const auto &envCase : cases) {
+        builder.appendEnv(envCase.key, envCase.value);
+    }
+
+    auto result = builder.build();
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+
+    // The OCI process environment must keep unquoted KEY=VALUE entries.
+    ASSERT_TRUE(builder.getConfig().process.has_value());
+    ASSERT_TRUE(builder.getConfig().process->env.has_value());
+    const auto &ociEnv = *builder.getConfig().process->env;
+    EXPECT_THAT(ociEnv, ::testing::Contains("QUOTED=a'b"));
+    EXPECT_THAT(ociEnv, ::testing::Contains("DOLLAR=$HOME"));
+    EXPECT_THAT(ociEnv, ::testing::Contains("EMPTY="));
+
+    const auto envScript = bundleDir.path() / "00env.sh";
+    std::ifstream envFile{ envScript };
+    ASSERT_TRUE(envFile.is_open());
+    std::string content((std::istreambuf_iterator<char>(envFile)),
+                        std::istreambuf_iterator<char>());
+    for (const auto &envCase : cases) {
+        EXPECT_THAT(content, ::testing::HasSubstr(envCase.expectedLine + "\n")) << envCase.key;
+    }
+
+    for (const auto &envCase : cases) {
+        const auto script = "set -e; . "
+          + linglong::common::strings::quoteBashArg(envScript.string()) + "; printf '%s' \"$"
+          + envCase.key + "\"";
+        auto output = linglong::utils::Cmd("sh").exec({ "-c", script });
+        ASSERT_TRUE(output.has_value()) << envCase.key << ": " << output.error().message();
+        EXPECT_EQ(*output, envCase.value) << envCase.key;
+    }
+}
+
+TEST_F(ContainerCfgBuilderTest, EnvScriptSkipsInvalidKeys)
+{
+    const std::vector<std::string> validKeys = { "FOO", "_OK", "OK1" };
+    const std::vector<std::string> invalidKeys = { "",        "1BAD",     "BAD-KEY",
+                                                   "BAD KEY", "BAD.KEY",  "BAD;KEY",
+                                                   "BAD=KEY", "BAD\"KEY", "BAD'KEY" };
+
+    ContainerCfgBuilder builder;
+    builder.setAppId("org.deepin.demo").setBasePath(baseDir.path()).setBundlePath(bundleDir.path());
+    for (const auto &key : validKeys) {
+        builder.appendEnv(key, "valid-" + key);
+    }
+    for (const auto &key : invalidKeys) {
+        builder.appendEnv(key, "invalid-" + key);
+    }
+
+    auto result = builder.build();
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+
+    ASSERT_TRUE(builder.getConfig().process.has_value());
+    ASSERT_TRUE(builder.getConfig().process->env.has_value());
+    const auto &ociEnv = *builder.getConfig().process->env;
+    for (const auto &key : validKeys) {
+        EXPECT_THAT(ociEnv, ::testing::Contains(key + "=valid-" + key)) << key;
+    }
+    for (const auto &key : invalidKeys) {
+        EXPECT_THAT(ociEnv, ::testing::Each(::testing::Not(::testing::StartsWith(key + "="))))
+          << "invalid key: " << key;
+    }
+
+    const auto envScript = bundleDir.path() / "00env.sh";
+    std::ifstream envFile{ envScript };
+    ASSERT_TRUE(envFile.is_open());
+    std::string content((std::istreambuf_iterator<char>(envFile)),
+                        std::istreambuf_iterator<char>());
+    for (const auto &key : validKeys) {
+        EXPECT_THAT(content, ::testing::HasSubstr("export " + key + "='valid-" + key + "'")) << key;
+    }
+    for (const auto &key : invalidKeys) {
+        EXPECT_EQ(content.find("export " + key + "="), std::string::npos) << "invalid key: " << key;
+    }
+
+    for (const auto &key : validKeys) {
+        const auto script = "set -e; . "
+          + linglong::common::strings::quoteBashArg(envScript.string()) + "; printf '%s' \"$" + key
+          + "\"";
+        auto output = linglong::utils::Cmd("sh").exec({ "-c", script });
+        ASSERT_TRUE(output.has_value()) << key << ": " << output.error().message();
+        EXPECT_EQ(*output, "valid-" + key) << key;
+    }
+}
+
 TEST_F(ContainerCfgBuilderTest, EnableXDPWritesContainerInfo)
 {
     ContainerCfgBuilder builder;
@@ -737,14 +849,13 @@ TEST_F(ContainerCfgBuilderTest, ResolvConfWithoutHostRoot)
     EXPECT_TRUE(hasResolv);
 }
 
-TEST_F(ContainerCfgBuilderTest, BindHostRootAndStatics)
+TEST_F(ContainerCfgBuilderTest, BindHostRootAddsMounts)
 {
     ContainerCfgBuilder builder;
     builder.setAppId("org.deepin.demo")
       .setBasePath(baseDir.path())
       .setBundlePath(bundleDir.path())
-      .bindHostRoot()
-      .bindHostStatics();
+      .bindHostRoot();
 
     auto result = builder.build();
     ASSERT_TRUE(result.has_value()) << result.error().message();
@@ -762,10 +873,6 @@ TEST_F(ContainerCfgBuilderTest, BindHostRootAndStatics)
     // bindHostRoot
     EXPECT_TRUE(findDest("/run/host"));
     EXPECT_TRUE(findDest("/run/host/rootfs"));
-    // bindHostStatics (only for paths that exist in the environment; the
-    // settings/tools path set varies between distro rootfs images)
-    EXPECT_TRUE(findDest("/etc/machine-id"));
-    EXPECT_TRUE(findDest("/usr/lib/locale"));
 }
 
 TEST_F(ContainerCfgBuilderTest, BindCgroupAddsMount)
@@ -1291,4 +1398,224 @@ TEST_F(ContainerCfgBuilderTest, BindHomeIgnoresRelativeXDGConfigOverride)
     }
 }
 
+TEST_F(ContainerCfgBuilderTest, AppendEnvMapAddsAllEntries)
+{
+    ContainerCfgBuilder builder;
+    builder.setAppId("org.deepin.demo")
+      .setBasePath(baseDir.path())
+      .setBundlePath(bundleDir.path())
+      .appendEnv(std::map<std::string, std::string>{ { "MAP_A", "one" }, { "MAP_B", "two" } });
+
+    auto result = builder.build();
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+
+    ASSERT_TRUE(builder.getConfig().process.has_value());
+    ASSERT_TRUE(builder.getConfig().process->env.has_value());
+    EXPECT_THAT(*builder.getConfig().process->env, ::testing::Contains("MAP_A=one"));
+    EXPECT_THAT(*builder.getConfig().process->env, ::testing::Contains("MAP_B=two"));
+}
+
+TEST_F(ContainerCfgBuilderTest, ForwardDefaultEnvForwardsKnownVariables)
+{
+    ScopedEnvVar langGuard{ "LANG", "zh_CN.UTF-8" };
+    ScopedEnvVar termGuard{ "TERM", "xterm-256color" };
+
+    ContainerCfgBuilder builder;
+    builder.setAppId("org.deepin.demo")
+      .setBasePath(baseDir.path())
+      .setBundlePath(bundleDir.path())
+      .forwardDefaultEnv();
+
+    auto result = builder.build();
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+
+    ASSERT_TRUE(builder.getConfig().process.has_value());
+    ASSERT_TRUE(builder.getConfig().process->env.has_value());
+    EXPECT_THAT(*builder.getConfig().process->env, ::testing::Contains("LANG=zh_CN.UTF-8"));
+    EXPECT_THAT(*builder.getConfig().process->env, ::testing::Contains("TERM=xterm-256color"));
+}
+
+TEST_F(ContainerCfgBuilderTest, SetAppPathAddsLinglongAppId)
+{
+    ContainerCfgBuilder builder;
+    builder.setAppId("org.deepin.demo")
+      .setBasePath(baseDir.path())
+      .setBundlePath(bundleDir.path())
+      .setAppPath(appDir.path());
+
+    auto result = builder.build();
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+
+    ASSERT_TRUE(builder.getConfig().process.has_value());
+    ASSERT_TRUE(builder.getConfig().process->env.has_value());
+    EXPECT_THAT(*builder.getConfig().process->env,
+                ::testing::Contains("LINGLONG_APPID=org.deepin.demo"));
+}
+
+TEST_F(ContainerCfgBuilderTest, BindHomeWithMissingXDGDataHomeFails)
+{
+    auto home = baseDir.path() / "home-missing-data";
+    ASSERT_TRUE(std::filesystem::create_directories(home));
+    // /proc does not allow creating new directories, so the mount source can
+    // not be materialised by the builder.
+    ScopedEnvVar dataGuard{ "XDG_DATA_HOME", "/proc/linglong-missing-data-home" };
+
+    ContainerCfgBuilder builder;
+    builder.setAppId("org.deepin.demo")
+      .setBasePath(baseDir.path())
+      .setBundlePath(bundleDir.path())
+      .bindHome(home);
+
+    auto result = builder.build();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_THAT(result.error().message(), ::testing::HasSubstr("can't be mount"));
+}
+
+TEST_F(ContainerCfgBuilderTest, MapPrivateWithMissingHostPathFails)
+{
+    auto home = baseDir.path() / "home-private";
+    ASSERT_TRUE(std::filesystem::create_directories(home));
+
+    ContainerCfgBuilder builder;
+    builder.setAppId("org.deepin.demo")
+      .setBasePath(baseDir.path())
+      .setBundlePath(bundleDir.path())
+      .bindHome(home)
+      .enablePrivateDir()
+      .mapPrivate("/missing-private-file", false);
+
+    auto result = builder.build();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_THAT(result.error().message(), ::testing::HasSubstr("is not exist"));
+}
+
+TEST_F(ContainerCfgBuilderTest, ResolvConfSymlinkConflictFails)
+{
+    std::ofstream(bundleDir.path() / "resolv.conf") << "preexisting";
+
+    ContainerCfgBuilder builder;
+    builder.setAppId("org.deepin.demo")
+      .setBasePath(baseDir.path())
+      .setBundlePath(bundleDir.path())
+      .bindHostRoot()
+      .setResolvConf("/etc/resolv.conf");
+
+    auto result = builder.build();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_THAT(result.error().message(), ::testing::HasSubstr("Failed to create symlink"));
+}
+
 } // namespace
+
+TEST_F(ContainerCfgBuilderTest, DisplaySystemAddsX11AndXauthorityMounts)
+{
+    const auto socket = baseDir.path() / "x11-socket";
+    std::ofstream{ socket } << "data";
+    const auto authFile = baseDir.path() / "Xauthority";
+    std::ofstream{ authFile } << "data";
+
+    ContainerCfgBuilder builder;
+    builder.setAppId("org.deepin.demo")
+      .setBasePath(baseDir.path())
+      .setBundlePath(bundleDir.path())
+      .bindRun()
+      .bindXAuthFile(authFile);
+
+    auto result = builder.build();
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    ASSERT_TRUE(builder.getConfig().mounts.has_value());
+    EXPECT_TRUE(builder.getConfig().process.has_value());
+    EXPECT_TRUE(builder.getConfig().process->env.has_value());
+    EXPECT_THAT(*builder.getConfig().process->env,
+                ::testing::Contains("XAUTHORITY=/run/linglong/Xauthority"));
+
+    ScopedEnvVar display("DISPLAY", socket.c_str());
+    ContainerCfgBuilder displayBuilder;
+    displayBuilder.setAppId("org.deepin.demo")
+      .setBasePath(baseDir.path())
+      .setBundlePath(bundleDir.path());
+    auto displayResult = displayBuilder.build();
+    ASSERT_TRUE(displayResult.has_value()) << displayResult.error().message();
+    ASSERT_TRUE(displayBuilder.getConfig().mounts.has_value());
+    bool foundTmpfs = false;
+    bool foundSocket = false;
+    for (const auto &mount : *displayBuilder.getConfig().mounts) {
+        if (mount.destination == "/tmp/.X11-unix") {
+            foundTmpfs = true;
+        }
+        if (mount.destination == "/tmp/.X11-unix/X1000") {
+            foundSocket = true;
+        }
+    }
+    EXPECT_TRUE(foundTmpfs);
+    EXPECT_TRUE(foundSocket);
+}
+
+TEST_F(ContainerCfgBuilderTest, XAuthWithoutRunMountFails)
+{
+    const auto authFile = baseDir.path() / "Xauthority";
+    std::ofstream{ authFile } << "data";
+
+    ContainerCfgBuilder builder;
+    builder.setAppId("org.deepin.demo")
+      .setBasePath(baseDir.path())
+      .setBundlePath(bundleDir.path())
+      .bindXAuthFile(authFile);
+
+    auto result = builder.build();
+    EXPECT_FALSE(result.has_value());
+    EXPECT_NE(result.error().message().find("run mount"), std::string::npos);
+}
+
+TEST_F(ContainerCfgBuilderTest, BindHomeMountsXdgOverridesAndPrivateDirectories)
+{
+    TempDir homeDir{ "ll-cfg-home-" };
+    TempDir xdgConfig{ "ll-cfg-xdg-config-" };
+    TempDir xdgCache{ "ll-cfg-xdg-cache-" };
+    std::filesystem::create_directories(xdgConfig.path() / "systemd" / "user");
+    std::filesystem::create_directories(xdgConfig.path() / "dconf");
+    std::ofstream{ xdgConfig.path() / "user-dirs.dirs" } << "XDG_DESKTOP_DIR=Desktop";
+    std::ofstream{ xdgConfig.path() / "user-dirs.locale" } << "en_US";
+    std::filesystem::create_directories(xdgCache.path() / "deepin" / "dde-api");
+
+    std::filesystem::create_directories(homeDir.path() / ".linglong" / "org.deepin.demo"
+                                        / "config");
+    std::filesystem::create_directories(homeDir.path() / ".linglong" / "org.deepin.demo" / "cache");
+    std::filesystem::create_directories(homeDir.path() / ".linglong" / "org.deepin.demo" / "state");
+
+    ScopedEnvVar configEnv("XDG_CONFIG_HOME", xdgConfig.path().c_str());
+    ScopedEnvVar cacheEnv("XDG_CACHE_HOME", xdgCache.path().c_str());
+    ScopedEnvVar dataEnv("XDG_DATA_HOME", (homeDir.path() / "data").c_str());
+    ScopedEnvVar stateEnv("XDG_STATE_HOME", (homeDir.path() / "state").c_str());
+
+    ContainerCfgBuilder builder;
+    builder.setAppId("org.deepin.demo")
+      .setBasePath(baseDir.path())
+      .setBundlePath(bundleDir.path())
+      .bindHome(homeDir.path())
+      .enablePrivateDir();
+
+    auto result = builder.build();
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+
+    bool privateConfig = false;
+    bool systemd = false;
+    bool dconf = false;
+    bool userDirs = false;
+    bool ddeApi = false;
+    for (const auto &mount : *builder.getConfig().mounts) {
+        privateConfig = privateConfig
+          || mount.source.value_or("")
+            == (homeDir.path() / ".linglong" / "org.deepin.demo" / "config");
+        systemd = systemd || mount.destination == homeDir.path().string() + "/.config/systemd/user";
+        dconf = dconf || mount.destination == homeDir.path().string() + "/.config/dconf";
+        userDirs =
+          userDirs || mount.destination == homeDir.path().string() + "/.config/user-dirs.dirs";
+        ddeApi = ddeApi || mount.destination == homeDir.path().string() + "/.cache/deepin/dde-api";
+    }
+    EXPECT_TRUE(privateConfig);
+    EXPECT_TRUE(systemd);
+    EXPECT_TRUE(dconf);
+    EXPECT_TRUE(userDirs);
+    EXPECT_TRUE(ddeApi);
+}

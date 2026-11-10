@@ -65,6 +65,26 @@ using ocppi::runtime::config::types::RootfsPropagation;
 
 namespace {
 
+// 00env.sh is sourced by the container shell, so only names accepted by
+// `export` may be serialized; an invalid name would break the whole script.
+bool isValidEnvKey(std::string_view key) noexcept
+{
+    const auto isAlpha = [](char c) {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+    };
+    const auto isDigit = [](char c) {
+        return c >= '0' && c <= '9';
+    };
+
+    if (key.empty() || (!isAlpha(key.front()) && key.front() != '_')) {
+        return false;
+    }
+
+    return std::all_of(key.begin() + 1, key.end(), [&](char c) {
+        return isAlpha(c) || isDigit(c) || c == '_';
+    });
+}
+
 bool bindIfExist(std::vector<Mount> &mounts,
                  std::filesystem::path source,
                  std::string destination = "",
@@ -590,26 +610,6 @@ ContainerCfgBuilder &ContainerCfgBuilder::bindHostRoot() noexcept
           .type = "bind",
         },
     };
-
-    return *this;
-}
-
-ContainerCfgBuilder &ContainerCfgBuilder::bindHostStatics() noexcept
-{
-    std::vector<std::filesystem::path> statics{
-        "/etc/machine-id",
-        // FIXME: support for host /etc/ssl, ref https://github.com/p11-glue/p11-kit
-        "/usr/lib/locale",
-        "/usr/share/fonts",
-        "/usr/share/icons",
-        "/usr/share/themes",
-        "/var/cache/fontconfig",
-    };
-
-    hostStaticsMount = std::vector<Mount>{};
-    for (const auto &loc : statics) {
-        bindIfExist(*hostStaticsMount, loc);
-    }
 
     return *this;
 }
@@ -1553,19 +1553,15 @@ utils::error::Result<void> ContainerCfgBuilder::buildEnv() noexcept
 
     auto env = std::vector<std::string>{};
     for (const auto &[key, value] : environment) {
+        if (!isValidEnvKey(key)) {
+            continue;
+        }
+
         env.emplace_back(key + "=" + value);
 
-        // here we process environment variables with single quotes.
-        // A=a'b ===> A='a'\''b'
-        std::string escaped;
-        for (auto it = value.begin(); it != value.end(); ++it) {
-            if (*it == '\'') {
-                escaped.append(R"('\'')");
-            } else {
-                escaped.push_back(*it);
-            }
-        }
-        ofs << "export " << key << "='" << escaped << "'" << std::endl;
+        // Serialize the value as one shell argument; quoting rules are owned by
+        // quoteBashArg so they cannot drift from other shell call sites.
+        ofs << "export " << key << '=' << common::strings::quoteBashArg(value) << std::endl;
     }
     ofs.close();
 
@@ -1917,10 +1913,6 @@ utils::error::Result<void> ContainerCfgBuilder::mergeMount() noexcept
 
     if (hostRootMount) {
         std::move(hostRootMount->begin(), hostRootMount->end(), std::back_inserter(mounts));
-    }
-
-    if (hostStaticsMount) {
-        std::move(hostStaticsMount->begin(), hostStaticsMount->end(), std::back_inserter(mounts));
     }
 
     if (homeMount) {

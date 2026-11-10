@@ -12,14 +12,17 @@ pfl_add_executable(
   DISABLE_INSTALL
   SOURCES
   # find -regex '\./src/.+\.[ch]\(pp\)?' -type f -printf '%P\n'| sort
+  src/common/scoped_runtime_paths.h
   src/common/scoped_umask.h
   src/common/tempdir.h
   src/linglong/builder/builder_script_test.cpp
   src/linglong/builder/config_test.cpp
   src/linglong/builder/linglong_builder_test.cpp
   src/linglong/builder/pull_dependency_test.cpp
+  src/linglong/builder/builder_commands_test.cpp
   src/linglong/builder/source_fetcher_test.cpp
   src/linglong/builder/project_lock_test.cpp
+  src/linglong/builder/project_validation_test.cpp
   src/linglong/cli/cli_printer_test.cpp
   src/linglong/cli/cli_test.cpp
   src/linglong/common/gkeyfile_wrapper_test.cpp
@@ -35,10 +38,12 @@ pfl_add_executable(
   src/linglong/mocks/ostree_repo_mock.h
   src/linglong/mocks/uab_file_mock.h
   src/linglong/oci-cfg-generators/container_cfg_builder_test.cpp
+  src/linglong/extension/extension_test.cpp
   src/linglong/package/architecture_test.cpp
   src/linglong/package/elf_handler_test.cpp
   src/linglong/package/fallback_version_test.cpp
   src/linglong/package/layer_dir_test.cpp
+  src/linglong/package/layer_file_test.cpp
   src/linglong/package/layer_packager_test.cpp
   src/linglong/package_manager/action_test.cpp
   src/linglong/package_manager/data_monitor_test.cpp
@@ -47,6 +52,7 @@ pfl_add_executable(
   src/linglong/package_manager/package_update_test.cpp
   src/linglong/package_manager/ref_installation_test.cpp
   src/linglong/package_manager/uab_installation_test.cpp
+  src/linglong/package_manager/package_manager_test.cpp
   src/linglong/package/reference_test.cpp
   src/linglong/package/semver_compare_test.cpp
   src/linglong/package/semver_increment_test.cpp
@@ -57,15 +63,18 @@ pfl_add_executable(
   src/linglong/package/uab_packager_test.cpp
   src/linglong/package/version_extra_test.cpp
   src/linglong/package/version_test.cpp
+  src/linglong/package/versionv1_test.cpp
   src/linglong/package/versionv2_test.cpp
   src/linglong/repo/client_factory_test.cpp
   src/linglong/repo/config_test.cpp
   src/linglong/repo/migrate_test.cpp
   src/linglong/repo/ostree_repo_test.cpp
   src/linglong/repo/ostree_repo_real_test.cpp
+  src/linglong/repo/remote_packages_test.cpp
   src/linglong/repo/repo_cache_test.cpp
   src/linglong/runtime/container_builder_test.cpp
   src/linglong/runtime/overlayfs_driver_test.cpp
+  src/linglong/runtime/container_test.cpp
   src/linglong/runtime/run_context_test.cpp
   src/linglong/utils/bash_command_helper_test.cpp
   src/linglong/utils/cmd_test.cpp

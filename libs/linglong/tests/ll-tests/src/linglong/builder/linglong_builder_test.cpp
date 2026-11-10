@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: 2026 UnionTech Software Technology Co., Ltd.
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "../../common/tempdir.h"
 #include "../mocks/linglong_builder_mock.h"
+#include "configure.h"
 #include "linglong/builder/builder_directory.h"
 #include "linglong/builder/linglong_builder.h"
 #include "linglong/builder/source_cache.h"
@@ -15,6 +17,7 @@
 #include <cerrno>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <unordered_set>
@@ -912,4 +915,60 @@ TEST(LinglongBuilder, CleanWithPermissionIssue)
     auto result = builder.cleanBuildArtifacts();
     ASSERT_TRUE(result.has_value()) << result.error().message();
     EXPECT_FALSE(fs::exists(linglongDir));
+}
+
+namespace {
+
+linglong::api::types::v1::BuilderProject makeProjectForBuilderBehavior()
+{
+    linglong::api::types::v1::BuilderProject project;
+    project.build = "make demo";
+    project.version = "1";
+    project.package.id = "org.example.demo";
+    project.package.name = "Demo";
+    project.package.version = "1.0.0.0";
+    project.package.kind = "app";
+    project.package.description = "demo";
+    return project;
+}
+
+std::string readTextFile(const std::filesystem::path &path)
+{
+    std::ifstream input(path);
+    return { std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>() };
+}
+
+} // namespace
+
+TEST(LinglongBuilder, ExportUABRejectsMissingProjectWithoutRef)
+{
+    TempDir workingDir;
+    linglong::builder::BuilderMock builder(workingDir.path());
+
+    auto result = builder.exportUAB({});
+    ASSERT_FALSE(result);
+    EXPECT_THAT(result.error().message(),
+                ::testing::HasSubstr("not under project and --ref is not specified"));
+}
+
+TEST(LinglongBuilder, ExportLayerRejectsProjectWithoutImportedModules)
+{
+    TempDir workingDir;
+    auto project = makeProjectForBuilderBehavior();
+    linglong::builder::BuilderMock builder(std::move(project), workingDir.path());
+
+    auto result = builder.exportLayer({});
+    ASSERT_FALSE(result);
+    EXPECT_THAT(result.error().message(), ::testing::HasSubstr("no "));
+}
+
+TEST(LinglongBuilder, RuntimeCheckSkipsNonAppProject)
+{
+    TempDir workingDir;
+    auto project = makeProjectForBuilderBehavior();
+    project.package.kind = "runtime";
+    linglong::builder::BuilderMock builder(std::move(project), workingDir.path());
+
+    auto result = builder.runtimeCheck();
+    EXPECT_TRUE(result) << result.error().message();
 }
