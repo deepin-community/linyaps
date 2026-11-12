@@ -1,0 +1,96 @@
+name: sync latest deepin release branch
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 1 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deepin-sync-release
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/OpenAtom-Linyaps/linyaps.git
+          git fetch upstream --no-tags --prune --no-recurse-submodules
+
+      - name: Determine latest release branch
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          RELEASE_BRANCH="$(
+            git for-each-ref \
+              --format='%(refname:strip=3)' \
+              refs/remotes/upstream \
+              | grep -E '^release/[0-9]+\.[0-9]+$' \
+              | sort -V \
+              | tail -n 1
+          )" || true
+          if [[ -z "$RELEASE_BRANCH" ]]; then
+            echo "No upstream release branch found; skipping."
+            echo "branch=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! git show-ref --verify --quiet "refs/remotes/origin/${RELEASE_BRANCH}"; then
+            echo "deepin ${RELEASE_BRANCH} does not exist; skipping."
+            echo "branch=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "branch=${RELEASE_BRANCH}" >> "$GITHUB_OUTPUT"
+
+      - name: Merge latest release branch
+        if: steps.release.outputs.branch != ''
+        id: merge
+        shell: bash
+        env:
+          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          set -euo pipefail
+          git config user.name "linyaps-release-bot"
+          git config user.email "release-bot@users.noreply.github.com"
+          if git merge-base --is-ancestor "upstream/${RELEASE_BRANCH}" \
+            "origin/${RELEASE_BRANCH}"; then
+            echo "${RELEASE_BRANCH} is already current."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git checkout -B "$RELEASE_BRANCH" "origin/${RELEASE_BRANCH}"
+          if ! git merge --no-edit "upstream/${RELEASE_BRANCH}"; then
+            git merge --abort
+            echo "Failed to merge upstream/${RELEASE_BRANCH}; stopping." >&2
+            exit 1
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Update existing release branch
+        if: steps.merge.outputs.changed == 'true'
+        uses: actions/github-script@v8
+        env:
+          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+          NEW_SHA: ${{ steps.merge.outputs.sha }}
+        with:
+          script: |
+            await github.rest.git.updateRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `heads/${process.env.RELEASE_BRANCH}`,
+              sha: process.env.NEW_SHA,
+              force: false
+            });

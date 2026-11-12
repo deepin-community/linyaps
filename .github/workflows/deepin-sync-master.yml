@@ -1,0 +1,63 @@
+name: sync deepin master
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 1 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deepin-sync-master
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/OpenAtom-Linyaps/linyaps.git
+          git fetch upstream --no-tags --prune --no-recurse-submodules
+
+      - name: Wait for next development version
+        id: readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          RELEASE_FLAG="$(git show upstream/master:CMakeLists.txt \
+            | sed -n '/set(LINGLONG_RELEASE/,/)/p' \
+            | sed -n 's/^[[:space:]]*\(ON\|OFF\)$/\1/p' \
+            | head -n 1)"
+          if [[ "$RELEASE_FLAG" != "OFF" ]]; then
+            echo "Upstream master is not on the next development version yet; skipping."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge upstream master
+        if: steps.readiness.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git merge-base --is-ancestor upstream/master HEAD; then
+            echo "deepin master is already current."
+            exit 0
+          fi
+          git config user.name "linyaps-release-bot"
+          git config user.email "release-bot@users.noreply.github.com"
+          if ! git merge --no-edit upstream/master; then
+            git merge --abort
+            echo "Failed to merge upstream/master; leaving deepin master unchanged." >&2
+            exit 1
+          fi
+          git push origin HEAD:master

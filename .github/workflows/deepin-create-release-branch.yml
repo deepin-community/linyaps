@@ -1,0 +1,221 @@
+name: create and tag deepin release branch
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    types: [closed]
+    paths:
+      - debian/changelog
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deepin-release-branch
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/OpenAtom-Linyaps/linyaps.git
+          git fetch upstream --no-tags --prune --no-recurse-submodules
+
+      - name: Determine release branch
+        id: target
+        shell: bash
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
+        run: |
+          set -euo pipefail
+          RELEASE_BRANCH="$(
+            git for-each-ref \
+              --format='%(refname:strip=3)' \
+              refs/remotes/upstream \
+              | grep -E '^release/[0-9]+\.[0-9]+$' \
+              | sort -V \
+              | tail -n 1
+          )" || true
+          if [[ -z "$RELEASE_BRANCH" ]]; then
+            echo "No upstream release branch found; skipping."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -n "$BASE_REF" && "$BASE_REF" != "master" && "$BASE_REF" != "$RELEASE_BRANCH" ]]; then
+            echo "PR target ${BASE_REF} is not the current release line; skipping."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "release_branch=${RELEASE_BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Determine whether to create release branch
+        id: readiness
+        if: steps.target.outputs.proceed == 'true'
+        shell: bash
+        env:
+          RELEASE_BRANCH: ${{ steps.target.outputs.release_branch }}
+        run: |
+          set -euo pipefail
+          if git show-ref --verify --quiet "refs/remotes/origin/${RELEASE_BRANCH}"; then
+            echo "should_create=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          RELEASE_FLAG="$(git show upstream/master:CMakeLists.txt \
+            | sed -n '/set(LINGLONG_RELEASE/,/)/p' \
+            | sed -n 's/^[[:space:]]*\(ON\|OFF\)$/\1/p' \
+            | head -n 1)"
+          if [[ "$RELEASE_FLAG" != "OFF" ]]; then
+            echo "Upstream master is not on the next development version; skipping."
+            echo "should_create=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! git merge-base --is-ancestor upstream/master origin/master; then
+            echo "deepin master is not current; skipping release branch creation."
+            echo "should_create=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "should_create=true" >> "$GITHUB_OUTPUT"
+
+      - name: Create release branch
+        if: steps.readiness.outputs.should_create == 'true'
+        shell: bash
+        env:
+          RELEASE_BRANCH: ${{ steps.target.outputs.release_branch }}
+        run: |
+          set -euo pipefail
+          git checkout -B "$RELEASE_BRANCH" "upstream/$RELEASE_BRANCH"
+          git checkout origin/master -- debian rpm
+          git config user.name "linyaps-release-bot"
+          git config user.email "release-bot@users.noreply.github.com"
+          git add debian rpm
+          git commit -m "create release branch for ${RELEASE_BRANCH#release/}"
+          git push origin "$RELEASE_BRANCH"
+
+      - name: Checkout release branch
+        if: steps.target.outputs.proceed == 'true'
+        shell: bash
+        env:
+          RELEASE_BRANCH: ${{ steps.target.outputs.release_branch }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$RELEASE_BRANCH"
+          git checkout -B "$RELEASE_BRANCH" "origin/$RELEASE_BRANCH"
+
+      - name: Determine release version
+        id: version
+        if: steps.target.outputs.proceed == 'true'
+        shell: bash
+        env:
+          RELEASE_BRANCH: ${{ steps.target.outputs.release_branch }}
+        run: |
+          set -euo pipefail
+          RELEASE_LINE="${RELEASE_BRANCH#release/}"
+          CHANGELOG_ENTRY="$(sed -n '1s/.*linglong (\([^)]*\)).*/\1/p' debian/changelog)"
+          if [[ ! "$CHANGELOG_ENTRY" =~ ^([0-9]+\.[0-9]+\.[0-9]+)([-~].*)?$ ]]; then
+            echo "debian/changelog has no valid upstream version." >&2
+            exit 1
+          fi
+          CANDIDATE_VERSION="${BASH_REMATCH[1]}"
+          RPM_VERSION="$(sed -n 's/^Version:[[:space:]]*\([^[:space:]]*\).*/\1/p' rpm/linglong.spec | head -n 1)"
+          if [[ "${CANDIDATE_VERSION%.*}" != "$RELEASE_LINE" ]]; then
+            echo "debian/changelog ${CANDIDATE_VERSION} is outside ${RELEASE_LINE}." >&2
+            exit 1
+          fi
+          if [[ "${RPM_VERSION%.*}" != "$RELEASE_LINE" ]]; then
+            echo "rpm/linglong.spec ${RPM_VERSION} is outside ${RELEASE_LINE}." >&2
+            exit 1
+          fi
+
+          PREVIOUS_TAG="$(
+            git tag --merged HEAD --list "${RELEASE_LINE}.*" \
+              | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -V \
+              | tail -n 1
+          )" || true
+          if [[ -n "$PREVIOUS_TAG" ]]; then
+            HIGHEST="$(
+              printf '%s\n%s\n' "$PREVIOUS_TAG" "$CANDIDATE_VERSION" \
+                | sort -V \
+                | tail -n 1
+            )"
+            if [[ "$CANDIDATE_VERSION" == "$PREVIOUS_TAG" || "$HIGHEST" != "$CANDIDATE_VERSION" ]]; then
+              echo "${CANDIDATE_VERSION} is not greater than previous tag ${PREVIOUS_TAG}; skipping tag."
+              echo "should_tag=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          {
+            echo "candidate_version=${CANDIDATE_VERSION}"
+            echo "release_line=${RELEASE_LINE}"
+            echo "should_tag=true"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate release branch
+        if: steps.version.outputs.should_tag == 'true'
+        shell: bash
+        env:
+          RELEASE_BRANCH: ${{ steps.target.outputs.release_branch }}
+        run: |
+          set -euo pipefail
+          SERIES="debian/patches/series"
+          if [[ ! -f "$SERIES" ]]; then
+            echo "debian/patches/series is missing." >&2
+            exit 1
+          fi
+          while IFS= read -r LINE; do
+            LINE="${LINE%%#*}"
+            read -r PATCH_NAME _ <<< "$LINE"
+            [[ -z "$PATCH_NAME" ]] && continue
+            PATCH_PATH="debian/patches/$PATCH_NAME"
+            if [[ ! -f "$PATCH_PATH" ]]; then
+              echo "Patch listed in series is missing: $PATCH_NAME" >&2
+              exit 1
+            fi
+            if ! patch -p1 --batch --forward --silent \
+              --no-backup-if-mismatch -i "$PATCH_PATH"; then
+              echo "Patch does not apply on ${RELEASE_BRANCH}: $PATCH_NAME" >&2
+              exit 1
+            fi
+          done < "$SERIES"
+
+      - name: Create release tag
+        if: steps.version.outputs.should_tag == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.candidate_version }}
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$(git rev-parse HEAD)"
+          set +e
+          git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" >/dev/null 2>&1
+          STATUS=$?
+          set -e
+          if [[ "$STATUS" -eq 0 ]]; then
+            git fetch origin "refs/tags/${VERSION}:refs/tags/${VERSION}"
+            TAG_SHA="$(git rev-parse "${VERSION}^{commit}")"
+            if [[ "$TAG_SHA" == "$HEAD_SHA" ]]; then
+              echo "Tag ${VERSION} already points to release branch HEAD; skipping."
+              exit 0
+            fi
+            echo "Tag ${VERSION} already exists on a different commit." >&2
+            exit 1
+          fi
+          if [[ "$STATUS" -ne 2 ]]; then
+            echo "Unable to query tag ${VERSION}." >&2
+            exit 1
+          fi
+          git tag -a "$VERSION" "$HEAD_SHA" -m "release ${VERSION}"
+          git push origin "$VERSION"
