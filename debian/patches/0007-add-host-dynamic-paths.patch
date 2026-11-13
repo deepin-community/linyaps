@@ -2,18 +2,24 @@ Index: linyaps/libs/linglong/src/linglong/runtime/run_context.cpp
 ===================================================================
 --- linyaps.orig/libs/linglong/src/linglong/runtime/run_context.cpp
 +++ linyaps/libs/linglong/src/linglong/runtime/run_context.cpp
-@@ -848,7 +848,13 @@ void RunContext::resolveHostDynamic()
+@@ -858,7 +858,7 @@ void RunContext::resolveHostDynamic()
  {
      LINGLONG_TRACE("resolve host dynamic paths");
  
--    constexpr std::array<const char *, 0> paths{};
-+    constexpr std::array<const char *, 5> paths{
+-    constexpr std::array<const char *, 7> paths{
++    constexpr std::array<const char *, 12> paths{
+         "/etc/machine-id",
+         // FIXME: support for host /etc/ssl, ref https://github.com/p11-glue/p11-kit
+         "/usr/lib/locale",
+@@ -867,6 +867,11 @@ void RunContext::resolveHostDynamic()
+         "/usr/share/themes",
+         "/var/cache/fontconfig",
+         "/usr/local/share/fonts",
 +        "/usr/share/wallpapers",
 +        "/usr/share/music",
 +        "/usr/share/extensions-from-app-store",
 +        "/usr/share/dsg",
 +        "/usr/share/deepin/distribution.info",
-+    };
+     };
  
      std::vector<api::types::v1::Mount> hostDynamic;
-     hostDynamic.reserve(paths.size());
