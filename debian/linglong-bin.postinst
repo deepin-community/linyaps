@@ -11,6 +11,10 @@
 # This is needed until debhelper-compat 14.
 instances="$(systemctl --no-legend --quiet list-units 'user@*' | sed -n -r 's/.*user@([0-9]+).service.*/\1/p')"
 if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ]; then
+        if [ "$1" = "configure" ]; then
+                # Remove the global enable symlink left behind by older packages.
+                rm -f "${DPKG_ROOT:-}/etc/systemd/user/graphical-session.target.wants/cn.org.linyaps.preloader.service"
+        fi
         if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
                 # Here we reload synchronously, as we really need to block in
                 # order to ensure the following restart also works. Furthermore,
@@ -25,9 +29,6 @@ if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-decon
 
                 for instance in $instances; do
                         systemctl --user --machine="$instance"@ daemon-reload >/dev/null || true
-                done
-                for instance in $instances; do
-                        systemctl --global --machine="${instance}"@ enable cn.org.linyaps.preloader.service > /dev/null || true
                 done
         fi
 fi
