@@ -8,9 +8,14 @@
 #include "common/tempdir.h"
 #include "linglong/api/types/v1/Generators.hpp"
 #include "linglong/package/uab_packager.h"
+#include "linglong/utils/temporary_directory.h"
 
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <vector>
+
+#include <sys/stat.h>
 
 namespace linglong::package {
 namespace {
@@ -183,6 +188,107 @@ TEST(UABPackagerTest, EnsureExecEntryGeneratesMissingEntry)
     EXPECT_NE(permissions & std::filesystem::perms::owner_exec, std::filesystem::perms::none);
 }
 
+TEST(UABPackagerTest, ExportToFileWithinFilesystem)
+{
+    TempDir tempDir("uab-packager-test-");
+
+    const auto source = tempDir.path() / ".exported.uab";
+    const auto destination = tempDir.path() / "output.uab";
+    std::ofstream{ source } << "bundle";
+
+    auto result = detail::exportToFile(source, destination);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+
+    EXPECT_FALSE(std::filesystem::exists(source));
+    std::ifstream output{ destination };
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>{ output }, {}), "bundle");
+
+    const auto permissions = std::filesystem::status(destination).permissions();
+    EXPECT_NE(permissions & std::filesystem::perms::owner_exec, std::filesystem::perms::none);
+}
+
+TEST(UABPackagerTest, ExportToFileAcrossFilesystems)
+{
+    TempDir sourceDir("uab-packager-test-");
+    // /dev/shm is a tmpfs on most systems, so it is usually not on the same filesystem as the
+    // system temporary directory.
+    auto destinationDir = utils::TemporaryDirectory::create("uab-packager-test-", "/dev/shm");
+    if (!destinationDir) {
+        GTEST_SKIP() << "/dev/shm is not available: " << destinationDir.error().message();
+    }
+
+    struct stat sourceStat{};
+    struct stat destinationStat{};
+    ASSERT_EQ(::stat(sourceDir.path().c_str(), &sourceStat), 0);
+    ASSERT_EQ(::stat(destinationDir->path().c_str(), &destinationStat), 0);
+    if (sourceStat.st_dev == destinationStat.st_dev) {
+        GTEST_SKIP() << "the temporary directory and /dev/shm are on the same filesystem";
+    }
+
+    const auto source = sourceDir.path() / ".exported.uab";
+    const auto destination = destinationDir->path() / "output.uab";
+    std::ofstream{ source } << "new bundle";
+    std::ofstream{ destination } << "old bundle";
+
+    auto result = detail::exportToFile(source, destination);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+
+    EXPECT_FALSE(std::filesystem::exists(source));
+    std::ifstream output{ destination };
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>{ output }, {}), "new bundle");
+    // Only the output is left in the destination directory, no temporary file.
+    EXPECT_EQ(std::distance(std::filesystem::directory_iterator{ destinationDir->path() },
+                            std::filesystem::directory_iterator{}),
+              1);
+
+    const auto permissions = std::filesystem::status(destination).permissions();
+    EXPECT_NE(permissions & std::filesystem::perms::owner_exec, std::filesystem::perms::none);
+}
+
+TEST(UABPackagerTest, ExportToFileFailsWhenTemporaryExists)
+{
+    TempDir sourceDir("uab-packager-test-");
+    auto destinationDir = utils::TemporaryDirectory::create("uab-packager-test-", "/dev/shm");
+    if (!destinationDir) {
+        GTEST_SKIP() << "/dev/shm is not available: " << destinationDir.error().message();
+    }
+
+    struct stat sourceStat{};
+    struct stat destinationStat{};
+    ASSERT_EQ(::stat(sourceDir.path().c_str(), &sourceStat), 0);
+    ASSERT_EQ(::stat(destinationDir->path().c_str(), &destinationStat), 0);
+    if (sourceStat.st_dev == destinationStat.st_dev) {
+        GTEST_SKIP() << "the temporary directory and /dev/shm are on the same filesystem";
+    }
+
+    const auto source = sourceDir.path() / ".exported.uab";
+    const auto destination = destinationDir->path() / "output.uab";
+    const auto temporary = destinationDir->path() / ".output.uab.tmp";
+    std::ofstream{ source } << "new bundle";
+    std::ofstream{ temporary } << "stale";
+
+    auto result = detail::exportToFile(source, destination);
+
+    ASSERT_FALSE(result.has_value());
+    EXPECT_THAT(result.error().message(), ::testing::HasSubstr("remove the stale file"));
+    EXPECT_FALSE(std::filesystem::exists(destination));
+    EXPECT_TRUE(std::filesystem::exists(source));
+    // The pre-existing temporary file is not ours, so it must be left untouched.
+    std::ifstream stale{ temporary };
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>{ stale }, {}), "stale");
+}
+
+TEST(UABPackagerTest, ExportToFileFailsWhenSourceIsMissing)
+{
+    TempDir tempDir("uab-packager-test-");
+
+    auto result =
+      detail::exportToFile(tempDir.path() / "missing.uab", tempDir.path() / "output.uab");
+
+    ASSERT_FALSE(result.has_value());
+    EXPECT_FALSE(std::filesystem::exists(tempDir.path() / "output.uab"));
+}
+
 TEST(UABPackagerTest, SetIconRejectsNonExistent)
 {
     UABPackager packager("/tmp/build");
@@ -273,6 +379,203 @@ TEST(UABPackagerTest, PackEndToEndWithValidLayers)
 
     EXPECT_TRUE(std::filesystem::exists(outPath));
     EXPECT_GT(std::filesystem::file_size(outPath), 0);
+
+    const auto permissions = std::filesystem::status(outPath).permissions();
+    EXPECT_NE(permissions & std::filesystem::perms::owner_exec, std::filesystem::perms::none);
+}
+
+namespace {
+
+struct ExecLayerFixture
+{
+    TempDir dir;
+    std::filesystem::path path;
+
+    ExecLayerFixture(const std::string &kind, const std::string &id, bool withCommand)
+        : dir("uab-exec-layer-")
+    {
+        path = dir.path() / "layer";
+        std::filesystem::create_directories(path / "files" / "usr" / "bin");
+        std::ofstream{ path / "files" / "usr" / "bin" / "demo" } << "binary";
+
+        api::types::v1::PackageInfoV2 info;
+        info.id = id;
+        info.version = "1.0.0";
+        info.arch = { "x86_64" };
+        info.kind = kind;
+        info.packageInfoV2Module = "binary";
+        info.channel = "main";
+        if (withCommand) {
+            info.command = std::vector<std::string>{
+                "/opt/apps/" + id + "/files/usr/bin/demo",
+            };
+        }
+        std::ofstream{ path / "info.json" } << nlohmann::json(info).dump();
+    }
+};
+
+std::filesystem::path makeUabHeader(TempDir &dir)
+{
+    auto header = dir.path() / "header.elf";
+    std::filesystem::copy_file("/proc/self/exe", header);
+    return header;
+}
+
+} // namespace
+
+TEST(UABPackagerTest, PackExecModeUsesProvidedLoader)
+{
+    TempDir buildDir("uab-exec-build-");
+    TempDir headerDir("uab-exec-header-");
+    ExecLayerFixture base("base", "org.deepin.base", false);
+    ExecLayerFixture app("app", "com.example.app", false);
+
+    UABPackager packager(buildDir.path());
+    packager.setDefaultHeader(makeUabHeader(headerDir));
+    packager.setCompressor("lz4");
+    auto loader = buildDir.path() / "loader";
+    std::ofstream{ loader } << "custom loader";
+    packager.setLoader(loader);
+    ASSERT_TRUE(packager.appendLayer(LayerDir{ base.path }).has_value());
+    ASSERT_TRUE(packager.appendLayer(LayerDir{ app.path }).has_value());
+
+    auto output = buildDir.path() / "exec.uab";
+    auto result = packager.pack(output, UABPackagerMode::Exec);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_TRUE(std::filesystem::exists(output));
+}
+
+TEST(UABPackagerTest, PackExecModeGeneratesLoaderWhenAppHasCommand)
+{
+    TempDir buildDir("uab-exec-build-");
+    TempDir headerDir("uab-exec-header-");
+    ExecLayerFixture base("base", "org.deepin.base", false);
+    ExecLayerFixture app("app", "com.example.app", true);
+
+    UABPackager packager(buildDir.path());
+    packager.setDefaultHeader(makeUabHeader(headerDir));
+    packager.setCompressor("lz4");
+    ASSERT_TRUE(packager.appendLayer(LayerDir{ base.path }).has_value());
+    ASSERT_TRUE(packager.appendLayer(LayerDir{ app.path }).has_value());
+
+    auto output = buildDir.path() / "exec.uab";
+    auto result = packager.pack(output, UABPackagerMode::Exec);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_TRUE(std::filesystem::exists(output));
+}
+
+TEST(UABPackagerTest, PackExecModeRequiresAppLayerWithoutLoader)
+{
+    TempDir buildDir("uab-exec-build-");
+    TempDir headerDir("uab-exec-header-");
+    ExecLayerFixture base("base", "org.deepin.base", false);
+
+    UABPackager packager(buildDir.path());
+    packager.setDefaultHeader(makeUabHeader(headerDir));
+    packager.setCompressor("lz4");
+    ASSERT_TRUE(packager.appendLayer(LayerDir{ base.path }).has_value());
+
+    auto output = buildDir.path() / "exec.uab";
+    auto result = packager.pack(output, UABPackagerMode::Exec);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_THAT(result.error().message(), ::testing::HasSubstr("app layer is required"));
+}
+
+TEST(UABPackagerTest, PackReplacesStaleBundleDirectory)
+{
+    // /proc/self/exe serves as a valid ELF header.
+    TempDir headerDir("uab-header-");
+    auto header = headerDir.path() / "header.elf";
+    std::filesystem::copy_file("/proc/self/exe", header);
+
+    // Build a base layer (kind=base).
+    TempDir baseDir("uab-base-");
+    std::filesystem::create_directories(baseDir.path() / "files" / "usr" / "lib");
+    std::ofstream{ baseDir.path() / "files" / "usr" / "lib" / "libbase.so" } << "base";
+    {
+        api::types::v1::PackageInfoV2 baseInfo;
+        baseInfo.id = "org.deepin.base";
+        baseInfo.version = "1";
+        baseInfo.arch = { "x86_64" };
+        baseInfo.kind = "base";
+        baseInfo.packageInfoV2Module = "binary";
+        baseInfo.channel = "main";
+        nlohmann::json j = baseInfo;
+        std::ofstream{ baseDir.path() / "info.json" } << j.dump();
+    }
+
+    // Build an app layer (kind=app).
+    TempDir appDir("uab-app-");
+    std::filesystem::create_directories(appDir.path() / "files" / "usr" / "bin");
+    std::ofstream{ appDir.path() / "files" / "usr" / "bin" / "hello" } << "hello world";
+    {
+        api::types::v1::PackageInfoV2 appInfo;
+        appInfo.id = "com.example.app";
+        appInfo.version = "1.0.0";
+        appInfo.arch = { "x86_64" };
+        appInfo.kind = "app";
+        appInfo.packageInfoV2Module = "binary";
+        appInfo.channel = "main";
+        nlohmann::json j = appInfo;
+        std::ofstream{ appDir.path() / "info.json" } << j.dump();
+    }
+
+    LayerDir baseLayer(baseDir.path());
+    ASSERT_TRUE(baseLayer.valid());
+
+    LayerDir appLayer(appDir.path());
+    ASSERT_TRUE(appLayer.valid());
+
+    TempDir buildDir("uab-build-");
+    auto loaderFile = buildDir.path() / "uab-loader-dummy";
+    std::ofstream{ loaderFile } << "dummy loader";
+
+    // Simulate the leftovers of an interrupted export: a stale bundle directory
+    // holding a layer which is not part of this export.
+    const auto staleLayerDir = buildDir.path() / "bundle" / "layers" / "org.stale.app" / "binary";
+    std::filesystem::create_directories(staleLayerDir);
+    std::ofstream{ staleLayerDir / "info.json" } << "{}";
+
+    std::vector<std::filesystem::path> packedPaths;
+    auto bundleCB =
+      [&packedPaths](const std::filesystem::path &bundleFile,
+                     const std::filesystem::path &bundleDir) -> utils::error::Result<void> {
+        for (const auto &entry : std::filesystem::recursive_directory_iterator(bundleDir)) {
+            packedPaths.emplace_back(entry.path());
+        }
+        std::ofstream{ bundleFile } << "bundle";
+        return LINGLONG_OK;
+    };
+
+    auto packInto = [&](const std::filesystem::path &outPath) {
+        UABPackager packager(buildDir.path());
+        packager.setDefaultHeader(header);
+        packager.setCompressor("lz4");
+        packager.setLoader(loaderFile);
+        packager.setBundleCB(bundleCB);
+        EXPECT_TRUE(packager.appendLayer(baseLayer).has_value());
+        EXPECT_TRUE(packager.appendLayer(appLayer).has_value());
+        return packager.pack(outPath, UABPackagerMode::Distribution);
+    };
+
+    // The first export must tolerate the leftover bundle directory and must not
+    // pack its stale content into the new bundle.
+    auto first = packInto(buildDir.path() / "first.uab");
+    ASSERT_TRUE(first.has_value()) << first.error().message();
+    EXPECT_TRUE(std::filesystem::exists(buildDir.path() / "first.uab"));
+    EXPECT_GT(std::filesystem::file_size(buildDir.path() / "first.uab"), 0);
+    EXPECT_FALSE(std::filesystem::exists(staleLayerDir));
+    for (const auto &path : packedPaths) {
+        EXPECT_EQ(path.string().find("org.stale.app"), std::string::npos)
+          << "stale layer leaked into the bundle: " << path;
+    }
+
+    // The second export into the same working directory must succeed as well:
+    // the previous export left its own bundle directory behind.
+    auto second = packInto(buildDir.path() / "second.uab");
+    ASSERT_TRUE(second.has_value()) << second.error().message();
+    EXPECT_TRUE(std::filesystem::exists(buildDir.path() / "second.uab"));
+    EXPECT_GT(std::filesystem::file_size(buildDir.path() / "second.uab"), 0);
 }
 
 } // namespace

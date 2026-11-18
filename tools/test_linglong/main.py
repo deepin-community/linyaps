@@ -18,6 +18,7 @@ from .steps.runtime import RuntimeSteps
 from .steps.commands import CommandSteps
 from .steps.output import OutputSteps
 from .steps.service import ServiceSteps
+from .steps.signature import SignatureSteps
 
 
 class SmokeTest(
@@ -29,6 +30,7 @@ class SmokeTest(
     CommandSteps,
     OutputSteps,
     ServiceSteps,
+    SignatureSteps,
 ):
     STEPS = [
         ("清理并重置仓库", "reset_repositories", "仓库管理"),
@@ -45,6 +47,14 @@ class SmokeTest(
             "test_demo_build_and_export",
             "应用构建",
             ("create_demo_project",),
+        ),
+        # push 需要 demo 已经构建进本地仓库，所以要排在构建之后；
+        # 又因为要在项目目录里跑，必须早于「安装并运行 demo 应用」（那步会删项目目录）。
+        (
+            "push 到模拟仓库服务端",
+            "test_builder_push_to_mock_repo",
+            "应用构建",
+            ("test_demo_build_and_export",),
         ),
         (
             "验证 demo DBus 环境变量",
@@ -87,6 +97,15 @@ class SmokeTest(
             "test_builder_push_errors",
             "构建器覆盖",
             ("create_demo_project",),
+        ),
+        # UAB 里的"签名"其实是两块东西：.note.uab.sig 是摘要（verify 自己重算
+        # 比对），linglong.bundle.sign 是外部签名包（我们只搬运不验签）。这条
+        # 用例用自制 tar 当载荷，覆盖 extractSignData 的读段/写盘/解包，不依赖
+        # 真实的签名工具，也不改动系统状态。
+        (
+            "UAB 外部签名数据的提取",
+            "test_uab_signature_data",
+            "签名与校验",
         ),
         (
             "安装并运行 demo 应用",
@@ -288,6 +307,8 @@ class SmokeTest(
             ("configure_smoke_repositories",),
         ),
         ("upgrade 的依赖与清理选项", "test_upgrade_deps_prune_options", "命令覆盖"),
+        # 错误码 -> 提示语的映射：只触发失败、不改系统状态，随时可跑。
+        ("错误码对应的提示语", "test_error_code_messages", "命令覆盖"),
         # ── 覆盖率补强用例（第三批）──
         # 这三个不依赖 demo 产物，也不改变已安装应用，放最后最安全。
         # peer 模式走 ll-cli 自建的 package-manager，与 dbus 服务是两套代码；
