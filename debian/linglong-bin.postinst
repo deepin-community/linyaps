@@ -32,6 +32,9 @@ if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-decon
         fi
 fi
 
+# dbus reloaded its config on unpack, before deepin-linglong existed; reload again
+systemctl reload dbus >/dev/null 2>&1 || true
+
 if grep -qE '^ID="?(deepin|uos)"?' /etc/os-release; then
         ll-cli repo enable-mirror stable || true
 fi
