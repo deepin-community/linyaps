@@ -82,11 +82,13 @@ cd build
 %{_bindir}/llpkg
 %{_prefix}/lib/%{name}/container/*
 %{_prefix}/lib/%{name}/generate-xdg-data-dirs.sh
+%{_prefix}/lib/%{name}/generate-path.sh
 %{_prefix}/lib/sysusers.d/*.conf
 %{_prefix}/lib/tmpfiles.d/*.conf
 %{_prefix}/lib/systemd/system/*.service
 %{_prefix}/lib/systemd/system-preset/*.preset
 %{_prefix}/lib/systemd/system-environment-generators/*
+%{_prefix}/lib/systemd/user-environment-generators/*
 %{_prefix}/lib/systemd/user-generators/*
 %{_libexecdir}/%{name}/ll-package-manager
 %{_libexecdir}/%{name}/ld-cache-generator
