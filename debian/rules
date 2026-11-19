@@ -14,6 +14,11 @@ EXTRA_OPTION = -DCPM_LOCAL_PACKAGES_ONLY=ON -DENABLE_LINGLONG_INSTALLER=ON -DLIN
 override_dh_auto_configure:
 	dh_auto_configure --  ${EXTRA_OPTION}  ${DH_AUTO_ARGS}
 
+# uos_1070 ships dwz 0.13, which fails on the DWARF emitted by the compiler used
+# for these binaries ("Unknown DWARF DW_OP_255"). The multi-file optimization is
+# only a size optimization, so skip it rather than breaking the build.
+override_dh_dwz:
+
 # https://sources.debian.org/src/amavisd-new/1:2.13.0-3/debian/rules/?hl=10#L10
 execute_after_dh_installinit:
 	dh_installsysusers # this is needed until dh compat 14
