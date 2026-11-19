@@ -61,6 +61,10 @@ cd build
 
 %post -n linglong-bin
 %systemd_post org.deepin.linglong.PackageManager.service
+# create the sysusers user now (it is normally created by systemd-sysusers at boot),
+# then reload dbus so that its allow-own rule for deepin-linglong takes effect
+systemd-sysusers %{_prefix}/lib/sysusers.d/linglong.conf >/dev/null 2>&1 || true
+systemctl reload dbus >/dev/null 2>&1 || true
 
 %preun -n linglong-bin
 %systemd_preun org.deepin.linglong.PackageManager.service
