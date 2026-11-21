@@ -8,6 +8,7 @@
 import json
 import os
 import pty
+import re
 import shutil
 import tempfile
 import socket
@@ -25,6 +26,21 @@ from ..models import RepoState, StepResult, StepSkipped
 
 
 class RuntimeSteps:
+
+    # 「安装、升级并运行日历应用」跑完会把日历卸载掉，但下面几个用例还要
+    # 拿它当现成的应用来跑 run。所以这里自己补装一次（已装则跳过报错）。
+    def _ensure_calendar_installed(self):
+        if CALENDAR_APP_ID in self._sudo_ll_cli("list", timeout=120,
+                                                check=False).stdout:
+            return
+
+        # 装最新版本即可：这些用例只需要一个能跑起来的现成应用。
+        # 指定旧版本会因为「已安装最新版本」之类的提示直接失败。
+        self._sudo_ll_cli("install", CALENDAR_APP_ID, timeout=600, check=False)
+        listed = self._sudo_ll_cli("list", timeout=120, check=False)
+        if CALENDAR_APP_ID not in listed.stdout:
+            raise AssertionError(
+                f"补装日历应用失败: {(listed.stdout + listed.stderr)[:300]}")
 
     # ── Test: ll-cli run 的运行期选项 ──
     #
@@ -455,6 +471,84 @@ class RuntimeSteps:
                 if proc.poll() is None:
                     proc.kill()
                     proc.wait()
+        finally:
+            self._cleanup_containers(app_id)
+
+    # ── Test: 直接给容器 init 发信号 ──
+    #
+    # 容器里的 1 号进程是 container-init（ll-init），它用 signalfd + epoll
+    # 把宿主送进来的 SIGHUP/SIGINT/SIGTERM 转发给应用子进程，再回收子进程。
+    # 之前的用例只用过 ll-cli kill（走服务端/pidfd 那条路），从没直接给
+    # init 发过信号，所以 apps/ll-init/src/ll-init.cpp 的转发循环整块未覆盖。
+    #
+    # 这里起一个长驻容器，从 ps --json 拿到 init 的 pid（宿主命名空间），
+    # 依次发三种信号，每种都要求：容器自己退出、ps 里消失、没有残留。
+    def test_container_init_signal_forwarding(self):
+        app_id = CALENDAR_APP_ID
+        r = self._ll_cli("list", check=False)
+        if app_id not in (r.stdout or ""):
+            self._sudo_ll_cli("install", app_id, timeout=900, check=False)
+        if app_id not in (self._ll_cli("list", check=False).stdout or ""):
+            raise AssertionError(f"{app_id} 未安装，无法测容器信号转发")
+
+        try:
+            for signame in ("HUP", "INT", "TERM"):
+                self._cleanup_containers(app_id)
+                proc = subprocess.Popen(
+                    [LL_CLI, "run", app_id, "--", "sleep", "300"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                try:
+                    cid = self._wait_container(timeout=40, app_id=app_id)
+                    if not cid:
+                        raise AssertionError(f"[SIG{signame}] 容器没出现在 ps 里")
+
+                    arr = json.loads(
+                        self._ll_cli("ps", "--json", check=False).stdout or "[]")
+                    entry = next((i for i in arr if i.get("id") == cid), None)
+                    pid = (entry or {}).get("pid")
+                    if not pid:
+                        raise AssertionError(
+                            f"[SIG{signame}] ps --json 里没有容器 pid: {entry!r}")
+
+                    # 确认这个 pid 真的是容器 1 号进程（container-init），
+                    # 否则杀的是一个无关进程，覆盖和断言都失去意义
+                    comm = self._run_cmd(
+                        ["cat", f"/proc/{pid}/comm"], sudo=True, check=False)
+                    if "container-init" not in (comm.stdout or ""):
+                        raise AssertionError(
+                            f"[SIG{signame}] {pid} 不是 container-init: "
+                            f"{comm.stdout!r}")
+
+                    self._run_cmd(["kill", f"-{signame}", str(pid)],
+                                  sudo=True, check=False)
+
+                    rc = None
+                    deadline = time.time() + 30
+                    while time.time() < deadline:
+                        rc = proc.poll()
+                        if rc is not None:
+                            break
+                        time.sleep(1)
+                    if rc is None:
+                        raise AssertionError(
+                            f"[SIG{signame}] 信号发出去 30 秒容器还没退出")
+
+                    # 容器必须从 ps 里消失（ll-init 回收了子进程）
+                    gone = False
+                    deadline = time.time() + 30
+                    while time.time() < deadline:
+                        out = self._ll_cli("ps", "--json", check=False).stdout or ""
+                        if cid not in out:
+                            gone = True
+                            break
+                        time.sleep(1)
+                    if not gone:
+                        raise AssertionError(
+                            f"[SIG{signame}] 容器退出后仍留在 ll-cli ps 里")
+                finally:
+                    if proc.poll() is None:
+                        proc.kill()
+                        proc.wait()
         finally:
             self._cleanup_containers(app_id)
 
@@ -1237,6 +1331,7 @@ class RuntimeSteps:
     #     --device covtest.io/class=covdev0
     # kind 里带等号会被 split 成 3 段而报 "invalid device format"（踩过）。
     def test_cdi_device_injection(self):
+        self._ensure_calendar_installed()
         spec_dir = "/tmp/smoke-cdi"
         shutil.rmtree(spec_dir, ignore_errors=True)
         os.makedirs(spec_dir, exist_ok=True)
@@ -1443,6 +1538,7 @@ class RuntimeSteps:
     #    实测：在 unshare -m 里 rm/ln /etc/resolv.conf 会直接改坏宿主机，
     #    导致 DNS 失效、ll-cli search 报 code 3001（已发生过并修复）。
     def test_display_env_branches(self):
+        self._ensure_calendar_installed()
         cases = (
             ("XAUTHORITY 假路径", {"XAUTHORITY": "/tmp/smoke-no-such-xauth"}),
             ("XAUTHORITY 空", {"XAUTHORITY": ""}),
@@ -1477,6 +1573,7 @@ class RuntimeSteps:
     #   run --run-context        直接吃一段 JSON（RunContextConfig）
     #   uninstall --prune/--all  为兼容旧 ll-cli 保留，已废弃但仍在解析
     def test_hidden_options(self):
+        self._ensure_calendar_installed()
         app = CALENDAR_APP_ID
         inst = f"smokehidden{os.getpid()}"
 
@@ -1500,6 +1597,10 @@ class RuntimeSteps:
         # root 不显式传 --privileged 也必须自动进入 privileged 模式：
         # 与宿主机共享 user namespace，并获得原有的 privilege capabilities。
         hostUserNs = self._run_cmd(["readlink", "/proc/self/ns/user"], sudo=True)
+        # 期望的 CapEff 从宿主机 root 现取，别写死常量（宿主 capability 集会变）
+        hostCapEff = self._run_cmd(
+            ["awk", "/^CapEff:/{print $2}", "/proc/self/status"], sudo=True)
+        hostCapEff = hostCapEff.stdout.strip()
         r = self._sudo_ll_cli(
             "run", app, "--instance", inst + "auto", "--", "/bin/sh", "-c",
             "printf 'USERNS=%s\\n' \"$(readlink /proc/self/ns/user)\"; "
@@ -1511,9 +1612,22 @@ class RuntimeSteps:
         if f"USERNS={hostUserNs.stdout.strip()}" not in r.stdout:
             raise AssertionError(
                 f"root 自动 privileged 未共享宿主机 user namespace: {r.stdout[:300]}")
-        if "CAPEFF=00000000800435fb" not in r.stdout:
+        # 容器拿到的能力集是 ll-cli 固定的 13 项，而宿主机 root 的能力集
+        # 取决于内核和安全模块（这里就多出 CAP_MAC_OVERRIDE），不能要求逐位相等。
+        # 改成两条：承诺的 13 项一个不少，并且不超出宿主机 root 的范围。
+        # 0x800435fb = CAP_CHOWN|DAC_OVERRIDE|FOWNER|FSETID|KILL|SETGID|SETUID|
+        #              SETPCAP|NET_BIND_SERVICE|NET_RAW|NET_ADMIN|SYS_CHROOT|SETFCAP
+        privilegedCaps = 0x800435FB
+        matched = re.search(r"CAPEFF=([0-9a-fA-F]+)", r.stdout)
+        if matched is None:
+            raise AssertionError(f"没拿到容器 CapEff: {r.stdout[:300]}")
+        containerCaps = int(matched.group(1), 16)
+        if containerCaps & privilegedCaps != privilegedCaps:
             raise AssertionError(
-                f"root 自动 privileged capabilities 不匹配: {r.stdout[:300]}")
+                f"root 自动 privileged capabilities 缺项: {r.stdout[:300]}")
+        if hostCapEff and containerCaps & ~int(hostCapEff, 16):
+            raise AssertionError(
+                f"容器能力超出宿主机 root 的范围: {r.stdout[:300]}")
 
         # --caps-add（delimiter 为逗号）
         r = self._ll_cli("run", app, "--instance", inst + "c",

@@ -10,7 +10,6 @@
 #include "linglong/api/dbus/v1/task.h"
 #include "linglong/api/types/v1/CommonOptions.hpp"
 #include "linglong/api/types/v1/PackageInfoDisplay.hpp"
-#include "linglong/cli/error_presenter.h"
 #include "linglong/cli/interactive_notifier.h"
 #include "linglong/cli/printer.h"
 #include "linglong/common/cli/repo.h"
@@ -237,11 +236,14 @@ protected:
 private:
     [[nodiscard]] static utils::error::Result<void>
     RequestDirectories(const api::types::v1::PackageInfoV2 &info) noexcept;
+
+protected:
     [[nodiscard]] std::vector<std::string> filePathMapping(
       const std::vector<std::string> &command, const RunOptions &options) const noexcept;
     static std::string mappingFile(const std::filesystem::path &file) noexcept;
     static std::string mappingUrl(std::string_view url) noexcept;
 
+private:
     static void filterPackageInfosByType(
       std::map<std::string, std::vector<api::types::v1::PackageInfoV2>> &list,
       const std::string &type) noexcept;
@@ -301,9 +303,6 @@ private:
     void handleUninstallError(const utils::error::Error &error);
     void handleUpgradeError(const utils::error::Error &error);
     bool handleCommonError(const utils::error::Error &error);
-    void presentError(ErrorOperation operation,
-                      const utils::error::Error &error,
-                      const std::string &packageId = {});
     bool handleSearchResult(const QVariantMap &result, const SearchOptions &options);
     bool printCommonResult(const QVariantMap &result);
 
