@@ -1,16 +1,16 @@
 diff --git a/libs/linglong/src/linglong/runtime/run_context.cpp b/libs/linglong/src/linglong/runtime/run_context.cpp
 --- a/libs/linglong/src/linglong/runtime/run_context.cpp
 +++ b/libs/linglong/src/linglong/runtime/run_context.cpp
-@@ -867,14 +867,20 @@ void RunContext::resolveHostDynamic()
+@@ -866,7 +866,7 @@ void RunContext::resolveHostDynamic()
+
      // Default host paths mounted into the container; kept local because
      // resolveHostDynamic() is the only consumer of this table.
 -    constexpr std::array<HostDynamicEntry, 7> hostDynamicPaths{ {
-+    constexpr std::array<HostDynamicEntry, 13> hostDynamicPaths{ {
++    constexpr std::array<HostDynamicEntry, 12> hostDynamicPaths{ {
        { "/etc/machine-id" },
        // FIXME: support for host /etc/ssl, ref https://github.com/p11-glue/p11-kit
        { "/usr/lib/locale" },
-       { "/usr/share/fonts" },
-       { "/usr/share/icons" },
+@@ -875,10 +875,15 @@ void RunContext::resolveHostDynamic()
        { "/usr/share/themes" },
        { "/var/cache/fontconfig" },
        { "/usr/local/share/fonts" },
@@ -19,7 +19,42 @@ diff --git a/libs/linglong/src/linglong/runtime/run_context.cpp b/libs/linglong/
 +      { "/usr/share/extensions-from-app-store" },
 +      { "/usr/share/dsg" },
 +      { "/usr/share/deepin/distribution.info" },
-+      { "/persistent", false },
      } };
 
      std::vector<api::types::v1::Mount> hostDynamic;
+-    hostDynamic.reserve(hostDynamicPaths.size());
++    hostDynamic.reserve(hostDynamicPaths.size() + 1);
+     for (const auto &entry : hostDynamicPaths) {
+         hostDynamic.emplace_back(api::types::v1::Mount{
+           .destination = entry.path,
+@@ -889,6 +894,30 @@ void RunContext::resolveHostDynamic()
+         });
+     }
+
++    // Mount only the current user's persistent directory /persistent/$HOME
++    // instead of the whole /persistent, so other users' persistent data stays
++    // out of the container view. $HOME comes from getenv("HOME") at runtime;
++    // unsafe values (unset/empty/root/".." escape) are filtered out below.
++    if (const auto *homeEnv = ::getenv("HOME"); homeEnv != nullptr && *homeEnv != '\0') {
++        const auto homeRelative = std::filesystem::path(homeEnv).relative_path();
++        const auto persistentHome =
++          (std::filesystem::path{ "/persistent" } / homeRelative).lexically_normal().string();
++        if (homeRelative.empty() || persistentHome == "/persistent"
++            || persistentHome == "/persistent/" || persistentHome.rfind("/persistent/", 0) != 0) {
++            LogW("unsafe HOME '{}', skip mounting /persistent/$HOME", homeEnv);
++        } else {
++            hostDynamic.emplace_back(api::types::v1::Mount{
++              .destination = persistentHome,
++              .options = std::vector<std::string>{ "rbind", "rw", "rslave" },
++              .source = persistentHome,
++              .srcType = std::nullopt,
++              .type = "bind",
++            });
++        }
++    } else {
++        LogW("HOME is not set, skip mounting /persistent/$HOME");
++    }
++
+     ensureMountSrcType(hostDynamic);
+     hostDynamic.erase(std::remove_if(hostDynamic.begin(),
+                                      hostDynamic.end(),
