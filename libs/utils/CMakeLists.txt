@@ -64,11 +64,16 @@ pfl_add_library(
   cxx_std_17
   LINK_LIBRARIES
   PUBLIC
+  pthread
   PkgConfig::cap
-  PkgConfig::systemd
   fmt::fmt-lib
   linglong::api
   linglong::common
   linglong::ocppi
   tl::expected
   ytj::ytj)
+
+if(HAVE_SYSTEMD)
+  get_real_target_name(UTILS_TARGET linglong::utils)
+  target_link_libraries(${UTILS_TARGET} PUBLIC PkgConfig::systemd)
+endif()

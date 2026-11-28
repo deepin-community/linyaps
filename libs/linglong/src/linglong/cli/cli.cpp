@@ -1212,7 +1212,9 @@ utils::error::Result<int> Cli::reuseContainer(const std::string &id,
         if (ioSetup->option.tty) {
             ioSetup->listenFd.reset();
         } else if (ioSetup->pipes) {
-            ioSetup->pipes->setupChildStdio();
+            if (!ioSetup->pipes->setupChildStdio()) {
+                _exit(EXIT_FAILURE);
+            }
         }
 
         auto reuseCommand = utils::BashCommandHelper::generateBashCommandBase();
@@ -2743,7 +2745,9 @@ int Cli::depends(const DependsOptions &options)
     std::vector<DependsNode> trees;
     for (const auto &appRef : appRefs) {
         runtime::RunContext runContext(**repo);
-        auto resolveResult = runContext.resolve(appRef);
+        runtime::ResolveOptions resolveOptions;
+        resolveOptions.resolveRuntimeEnvironment = false;
+        auto resolveResult = runContext.resolve(appRef, resolveOptions);
         if (!resolveResult) {
             this->printer.printErr(resolveResult.error());
             return -1;
